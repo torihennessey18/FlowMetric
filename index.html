@@ -1,0 +1,3111 @@
+import React, { useState, useMemo } from 'react';
+import { Users, Video, LayoutGrid, Activity, Search, Check, X, AlertTriangle, ChevronRight, Plus, Filter, Star, Repeat, Target, Gauge, Lock, Unlock, CheckCircle2, AlertCircle, ShieldCheck, FileDown, MessageSquare, UserCircle, ChevronDown, FolderOpen, Printer, Camera, Maximize2 } from 'lucide-react';
+
+// =============================================================================
+// CLAYTON CHEER ELITE — TRYOUT COMMAND CENTER — v0.3
+// New in v0.3:
+//   - Over-placement is surfaced, not auto-fixed (red indicators everywhere)
+//   - Per-team Finalize button with hard blocks & soft warnings
+//   - Program-wide "Finalize All Rosters" button on dashboard
+//   - Locked team visual state
+// =============================================================================
+
+// =============================================================================
+// CLAYTON CHEER ELITE — TRYOUT COMMAND CENTER — v0.10
+// New in v0.10:
+//   - Drag-and-drop between position groups in Build view
+//   - Athletes have originalPosition (drives card color, set at registration)
+//     and position (current — what the math uses, changes when dragged)
+//   - Card color tints the whole chip so you can see at-a-glance origin
+//   - Recolor controls on athlete detail page
+// =============================================================================
+
+const POSITIONS = ['Main Base', 'Side Base', 'Backspot', 'Flyer', 'Extra'];
+const POS_ABBR = { 'Main Base': 'MB', 'Side Base': 'SB', 'Backspot': 'BK', 'Flyer': 'FL', 'Extra': 'EX' };
+
+// Position colors. Each gets a strong "primary" (used for stripes, borders, accents)
+// and a "tint" (very low-opacity background so the chip reads as that color
+// without overwhelming the layout).
+const POSITION_COLORS = {
+  'Main Base': { primary: '#dc2626', tint: 'rgba(220, 38, 38, 0.10)',  border: 'rgba(220, 38, 38, 0.35)',  label: 'Red'    },
+  'Side Base': { primary: '#2563eb', tint: 'rgba(37, 99, 235, 0.10)',  border: 'rgba(37, 99, 235, 0.35)',  label: 'Blue'   },
+  'Backspot':  { primary: '#9333ea', tint: 'rgba(147, 51, 234, 0.10)', border: 'rgba(147, 51, 234, 0.35)', label: 'Purple' },
+  'Flyer':     { primary: '#ec4899', tint: 'rgba(236, 72, 153, 0.10)', border: 'rgba(236, 72, 153, 0.35)', label: 'Pink'   },
+  'Extra':     { primary: '#6b7280', tint: 'rgba(107, 114, 128, 0.10)',border: 'rgba(107, 114, 128, 0.35)',label: 'Gray'   },
+};
+
+// Skill definitions — which skills have a level component, which only have execution
+const SKILL_KEYS = ['standingTumble', 'runningTumble', 'jumps', 'stunts'];
+const SKILL_DEFS = {
+  standingTumble: { label: 'Standing Tumble', hasLevel: true,  hasExecution: true },
+  runningTumble:  { label: 'Running Tumble',  hasLevel: true,  hasExecution: true },
+  jumps:          { label: 'Jumps',           hasLevel: false, hasExecution: true },
+  stunts:         { label: 'Stunts',          hasLevel: true,  hasExecution: true },
+};
+
+// Skill levels — 0 = Unrated, 1-5 = USASF levels, 6 = Worlds/Open
+// Each level corresponds to a position on the rating slider
+const SKILL_LEVELS = [
+  { value: 0, label: 'Unrated', short: '—' },
+  { value: 1, label: 'Level 1',     short: 'L1' },
+  { value: 2, label: 'Level 2',     short: 'L2' },
+  { value: 3, label: 'Level 3',     short: 'L3' },
+  { value: 4, label: 'Level 4',     short: 'L4' },
+  { value: 5, label: 'Level 5',     short: 'L5' },
+  { value: 6, label: 'L6 / Open',   short: 'L6' },
+];
+const SKILL_LEVEL_MAX = 6;
+
+// Quick reference: what each level means per skill (rough table — production will use CCE's exact rubric)
+const SKILL_LEVEL_DESC = {
+  standingTumble: {
+    1: 'Cartwheel, handstand',
+    2: 'Back walkover, BHS',
+    3: 'Standing tuck, BHS series',
+    4: 'Standing tuck w/ skills',
+    5: 'Standing full',
+    6: 'Standing double',
+  },
+  runningTumble: {
+    1: 'Roundoff, cartwheel',
+    2: 'RO BHS, front walkover',
+    3: 'RO BHS tuck, punch front',
+    4: 'Layout, RO BHS layout',
+    5: 'Full, double full',
+    6: 'Double full, whip pass',
+  },
+  jumps: {
+    1: 'Toe touch',
+    2: 'Pike, hurdler',
+    3: 'Jump combo (toe touch BHS)',
+    4: 'High-skill jump combos',
+    5: 'Toe touch full',
+    6: 'Quad jumps',
+  },
+  stunts: {
+    1: 'Prep / extension',
+    2: 'Single-base extension',
+    3: 'Extension, 1.5 high to high',
+    4: 'Stretches, full-up to ext',
+    5: 'Released stunts, twist-ups',
+    6: 'Helicopters, twisting cradles',
+  },
+};
+
+// Intangibles support "Unknown" (value -1) which is excluded from averages
+const INTANGIBLE_UNKNOWN = -1;
+
+// --- COACHES ---------------------------------------------------------------
+const COACHES = [
+  { id: 'c1', first: 'Willie',  last: 'Owner',            role: 'Owner',                  initials: 'WO', color: '#ff4d2e' },
+  { id: 'c2', first: 'Tori',    last: 'Program Director', role: 'Program Director',       initials: 'TP', color: '#5eb3ff' },
+  { id: 'c3', first: 'Kaleigh', last: 'Owner',            role: 'Owner',                  initials: 'KO', color: '#3ecf8e' },
+  { id: 'c4', first: 'Riley',   last: 'Prep Director',    role: 'Prep Program Director',  initials: 'RP', color: '#f5c24c' },
+];
+
+// --- PROJECTS (archive of past seasons + current) --------------------------
+const PROJECTS = [
+  { id: 'p2026', name: 'Tryouts 2026', season: '2026 Season', active: true,  athleteCount: 45 },
+  { id: 'p2025', name: 'Tryouts 2025', season: '2025 Season', active: false, athleteCount: 38, archived: true },
+  { id: 'p2024', name: 'Tryouts 2024', season: '2024 Season', active: false, athleteCount: 32, archived: true },
+];
+
+const TEAMS = [
+  { id: 't1', name: 'Tiny Novice',        level: 1, ageMin: 3, ageMax: 6,  division: 'Tiny',        type: 'Novice',  sizeTarget: 20, scoresheet: 'varsity' },
+  { id: 't2', name: 'Mini Novice',        level: 1, ageMin: 5, ageMax: 8,  division: 'Mini',        type: 'Novice',  sizeTarget: 20, scoresheet: 'varsity' },
+  { id: 't3', name: 'Youth 1 Prep',       level: 1, ageMin: 5, ageMax: 11, division: 'Youth',       type: 'Prep',    sizeTarget: 20, scoresheet: 'varsity' },
+  { id: 't4', name: 'Junior 1 Prep',      level: 1, ageMin: 8, ageMax: 14, division: 'Junior',      type: 'Prep',    sizeTarget: 20, scoresheet: 'varsity' },
+  { id: 't5', name: 'Youth 2 XS/S',       level: 2, ageMin: 5, ageMax: 11, division: 'Youth',       type: 'All Star', sizeTarget: 16, scoresheet: 'open' },
+  { id: 't6', name: 'Junior 1 Small',     level: 1, ageMin: 8, ageMax: 14, division: 'Junior',      type: 'All Star', sizeTarget: 20, scoresheet: 'open' },
+  { id: 't7', name: 'Junior 3 Small',     level: 3, ageMin: 8, ageMax: 14, division: 'Junior',      type: 'All Star', sizeTarget: 20, scoresheet: 'open' },
+  { id: 't8', name: 'Senior 1 XS/S',      level: 1, ageMin: 11, ageMax: 18,division: 'Senior',      type: 'All Star', sizeTarget: 16, scoresheet: 'open' },
+  { id: 't9', name: 'Senior Coed 5 XS',   level: 5, ageMin: 11, ageMax: 18,division: 'Senior Coed', type: 'All Star', sizeTarget: 16, scoresheet: 'open' },
+];
+
+function getMaxOutRequirements(team) {
+  const size = team.sizeTarget;
+  return {
+    standingTumble: { need: Math.ceil(size * 0.75), threshold: team.level, label: 'Standing Tumbling', hasLevel: true },
+    runningTumble:  { need: Math.ceil(size * 0.75), threshold: team.level, label: 'Running Tumbling',  hasLevel: true },
+    // Jumps don't have a level threshold — everyone on the roster contributes
+    jumps:          { need: Math.ceil(size * 1.00), threshold: 0,           label: 'Jumps',             hasLevel: false },
+    stunts:         { need: Math.ceil(size * 0.60), threshold: team.level, label: 'Stunts',            hasLevel: true },
+  };
+}
+
+// --- Seed athletes ---
+const rng = (seed) => { let s = seed; return () => { s = (s * 9301 + 49297) % 233280; return s / 233280; }; };
+const r = rng(7);
+const FIRST = ['Ava','Liam','Maya','Noah','Zoe','Ethan','Chloe','Mason','Lily','Logan','Aria','Jack','Mia','Owen','Ella','Luke','Ivy','Kai','Nora','Finn','Ruby','Eli','Sage','Cole','Tess','Reed','Wren','Asa','Bree','Knox','Jade','Dax','Kit','Cass','Beau','Skye','Gage','Rose','Pax','Eve'];
+const LAST = ['Miller','Reed','Cole','Grant','Hayes','Brooks','Flynn','Lane','Ross','Knox','Webb','Dean','Frost','Vale','Page','Shaw','Wade','Quinn','Moss','Lake','Fox','Day','Tate','Holt','Stone','Bell','Rios','Beck','Bloom','Park','Ash','Blair','Wolf','Winters','Pryor','Crane','Sage','Reyes','Oakes','Ames'];
+
+const mkAthlete = (i) => {
+  const age = 4 + Math.floor(r() * 14);
+  const rp = r();
+  const pos = rp < 0.25 ? 'Main Base' : rp < 0.5 ? 'Side Base' : rp < 0.7 ? 'Backspot' : rp < 0.88 ? 'Flyer' : 'Extra';
+  const isReturner = r() < 0.65;
+
+  // Athlete's "true" skill level (cap by age)
+  const ageToMaxLevel = (a) => Math.max(1, Math.min(6, Math.floor((a - 3) / 2.5)));
+  const levelCap = ageToMaxLevel(age);
+  const skillBaseLevel = Math.max(0, Math.min(levelCap, Math.round((levelCap - 1) + (r() - 0.5) * 2)));
+  // Their execution quality on whatever level they have (independent — strong tumbler vs sloppy tumbler)
+  const baseExecution = Math.max(3, Math.min(10, Math.round(5 + (r() - 0.5) * 5)));
+
+  // Per-coach LEVEL rating: each coach varies by ±1 around the truth, 0 = unrated
+  const perCoachLevel = (base) => {
+    const obj = {};
+    COACHES.forEach(c => {
+      let val = base + Math.round((r() - 0.5) * 2);
+      val = Math.max(0, Math.min(SKILL_LEVEL_MAX, val));
+      obj[c.id] = val;
+    });
+    return obj;
+  };
+
+  // Per-coach EXECUTION rating: 1-10, varies by ±2 around the truth
+  const perCoachExecution = (base) => {
+    const obj = {};
+    COACHES.forEach(c => {
+      let val = base + Math.round((r() - 0.5) * 3);
+      val = Math.max(1, Math.min(10, val));
+      obj[c.id] = val;
+    });
+    return obj;
+  };
+
+  // Build a skill object based on its definition (level only / execution only / both)
+  const buildSkill = (key) => {
+    const def = SKILL_DEFS[key];
+    const skillTrueLevel = Math.max(0, Math.min(SKILL_LEVEL_MAX, skillBaseLevel + Math.round((r() - 0.5) * 2)));
+    const skillTrueExec = Math.max(1, Math.min(10, baseExecution + Math.round((r() - 0.5) * 3)));
+    const out = {};
+    if (def.hasLevel) out.level = perCoachLevel(skillTrueLevel);
+    if (def.hasExecution) out.execution = perCoachExecution(skillTrueExec);
+    return out;
+  };
+
+  // Per-coach intangible rating with chance of "Unknown" for new athletes
+  const perCoachIntangible = (min, spread) => {
+    const obj = {};
+    COACHES.forEach(c => {
+      const unknownChance = isReturner ? 0.05 : 0.4;
+      if (r() < unknownChance) {
+        obj[c.id] = INTANGIBLE_UNKNOWN;
+      } else {
+        const val = Math.max(1, Math.min(10, Math.round(min + r() * spread)));
+        obj[c.id] = val;
+      }
+    });
+    return obj;
+  };
+
+  return {
+    id: 'a' + (i+1).toString().padStart(3,'0'),
+    num: 100 + i,
+    first: FIRST[i % FIRST.length],
+    last: LAST[(i * 3) % LAST.length],
+    age,
+    yearsExp: Math.max(0, Math.min(age - 3, Math.floor(r() * 8))),
+    position: pos,           // current position — drives math, can change via drag
+    originalPosition: pos,   // set at registration, never auto-changes
+    colorPosition: pos,      // drives card color; defaults to originalPosition; user can override
+    wantsCrossover: r() < 0.4,
+    photo: r() < 0.3 ? `https://i.pravatar.cc/240?img=${(i % 70) + 1}` : null,
+    skills: {
+      standingTumble: buildSkill('standingTumble'),
+      runningTumble: buildSkill('runningTumble'),
+      jumps: buildSkill('jumps'),
+      stunts: buildSkill('stunts'),
+    },
+    intangibles: {
+      leadership:   perCoachIntangible(3, 7),
+      attitude:     perCoachIntangible(4, 6),
+      reliability:  perCoachIntangible(4, 6),
+      attendance:   perCoachIntangible(5, 5),
+      coachability: perCoachIntangible(4, 6),
+      workEthic:    perCoachIntangible(4, 6),
+      pressure:     perCoachIntangible(3, 7),
+    },
+    videos: Math.floor(r() * 4),
+    placedOn: [],
+    isReturner,
+    notes: [],
+  };
+};
+const seedAthletes = Array.from({length: 45}, (_, i) => mkAthlete(i));
+
+const C = {
+  bg:       '#fafafa', // page background
+  panel:    '#ffffff', // card background
+  panel2:   '#f4f4f5', // subtle inset background
+  line:     '#e4e4e7', // hairline borders
+  line2:    '#d4d4d8', // stronger borders
+  text:     '#0d0f10', // primary text
+  dim:      '#52525b', // secondary text
+  dim2:     '#a1a1aa', // tertiary text
+  accent:   '#ff4d2e', // CCE orange-red — sharp single accent
+  accent2:  '#ffa07f',
+  green:    '#16a34a',
+  yellow:   '#d97706',
+  orange:   '#ea580c',
+  red:      '#dc2626',
+  blueCool: '#2563eb', // for Returner pill
+};
+const fontStack = {
+  display: `'Bebas Neue', 'Oswald', Impact, sans-serif`,
+  body: `'Inter Tight', 'Inter', system-ui, sans-serif`,
+  mono: `'JetBrains Mono', ui-monospace, monospace`
+};
+
+// =============================================================================
+// OVER-PLACEMENT HELPER
+// =============================================================================
+// Athlete is over-placed if:
+//   - On 2+ teams and wantsCrossover is OFF
+//   - On 3+ teams and wantsCrossover is ON
+function isOverPlaced(a) {
+  if (a.wantsCrossover) return a.placedOn.length > 2;
+  return a.placedOn.length > 1;
+}
+function placementLimit(a) { return a.wantsCrossover ? 2 : 1; }
+
+// Get the color set for an athlete based on their colorPosition (falls back to position, then Main Base).
+function athleteColors(a) {
+  const key = a.colorPosition || a.position || 'Main Base';
+  return POSITION_COLORS[key] || POSITION_COLORS['Main Base'];
+}
+
+// =============================================================================
+// RATING CONSENSUS — per-coach rating objects → consensus number + disagreement
+// =============================================================================
+// Skill LEVEL rating object: { c1: 3, c2: 4, c3: 0, c4: 3 } (0 = unrated)
+// EXECUTION rating object:   { c1: 7, c2: 8, c3: 6, c4: 7 } (1-10, undefined = not rated)
+// Intangible rating object:  { c1: 7, c2: -1, c3: 8, c4: 7 } (-1 = unknown)
+function ratingValues(obj, kind = 'skill') {
+  const all = Object.values(obj || {});
+  if (kind === 'skill') {
+    return all.filter(v => v !== undefined && v !== null && v > 0);
+  }
+  if (kind === 'execution') {
+    return all.filter(v => v !== undefined && v !== null && v > 0);
+  }
+  return all.filter(v => v !== undefined && v !== null && v !== INTANGIBLE_UNKNOWN);
+}
+function consensusRating(obj, kind = 'skill') {
+  const vals = ratingValues(obj, kind);
+  if (vals.length === 0) return 0;
+  return vals.reduce((s, v) => s + v, 0) / vals.length;
+}
+function ratingSpread(obj, kind = 'skill') {
+  const vals = ratingValues(obj, kind);
+  if (vals.length < 2) return 0;
+  return Math.max(...vals) - Math.min(...vals);
+}
+function hasDisagreement(obj, kind = 'skill') {
+  // Skills: 2+ level spread is meaningful
+  // Execution and intangibles: 3+ point spread on 1-10
+  const threshold = kind === 'skill' ? 2 : 3;
+  return ratingSpread(obj, kind) >= threshold;
+}
+function coachViewRating(obj, coachId, kind = 'skill') {
+  if (obj && obj[coachId] !== undefined) {
+    const v = obj[coachId];
+    if (kind === 'skill' && v === 0) return consensusRating(obj, kind);
+    if (kind === 'execution' && (v === 0 || v === undefined)) return consensusRating(obj, kind);
+    if (kind === 'intangible' && v === INTANGIBLE_UNKNOWN) return consensusRating(obj, kind);
+    return v;
+  }
+  return consensusRating(obj, kind);
+}
+
+// Overall athlete score (0-100) — used in lists/chips/pool rows.
+// Averages execution across all 4 skills (1-10 scale) → normalized to 100.
+// Level isn't used here because it only exists on 3 of 4 skills and would skew comparisons.
+function athleteOverallScore(a) {
+  const execs = SKILL_KEYS.map(k => a.skills?.[k]?.execution || 0).filter(v => v > 0);
+  if (execs.length === 0) return 0;
+  const avg = execs.reduce((s, v) => s + v, 0) / execs.length;
+  return Math.round(avg * 10);
+}
+// Resolve athlete skills/intangibles to plain number-keyed objects for a given view mode.
+// Skills resolve to { level: number, execution: number } where each component is the
+// consensus or current-coach view. Missing components stay missing.
+function resolveAthleteRatings(a, viewMode, selectedCoachId) {
+  const mapSkills = (obj) => {
+    const out = {};
+    Object.keys(obj).forEach(k => {
+      const skill = obj[k];
+      const resolved = {};
+      if (skill.level) {
+        const v = viewMode === 'coach'
+          ? coachViewRating(skill.level, selectedCoachId, 'skill')
+          : consensusRating(skill.level, 'skill');
+        resolved.level = Math.round(v * 10) / 10;
+      }
+      if (skill.execution) {
+        // Execution is on 1-10 scale, treat 0/undefined as not-rated, exclude from average
+        const v = viewMode === 'coach'
+          ? coachViewRating(skill.execution, selectedCoachId, 'execution')
+          : consensusRating(skill.execution, 'execution');
+        resolved.execution = Math.round(v * 10) / 10;
+      }
+      out[k] = resolved;
+    });
+    return out;
+  };
+  const mapIntangibles = (obj) => {
+    const out = {};
+    Object.keys(obj).forEach(k => {
+      const val = viewMode === 'coach'
+        ? coachViewRating(obj[k], selectedCoachId, 'intangible')
+        : consensusRating(obj[k], 'intangible');
+      out[k] = Math.round(val * 10) / 10;
+    });
+    return out;
+  };
+  return {
+    ...a,
+    skills: mapSkills(a.skills),
+    intangibles: mapIntangibles(a.intangibles),
+  };
+}
+
+function cultureContinuity(roster) {
+  if (roster.length === 0) return { pctNew: 0, newCount: 0, returnerCount: 0, tier: 'none', score: 0 };
+  const newCount = roster.filter(a => !a.isReturner).length;
+  const returnerCount = roster.length - newCount;
+  const pctNew = (newCount / roster.length) * 100;
+  // tiers: ≤25 green, 26-50 yellow, 51-75 orange, >75 red
+  let tier, score;
+  if (pctNew <= 25)      { tier = 'green';  score = 100; }
+  else if (pctNew <= 50) { tier = 'yellow'; score = 70; }
+  else if (pctNew <= 75) { tier = 'orange'; score = 40; }
+  else                   { tier = 'red';    score = 15; }
+  return { pctNew, newCount, returnerCount, tier, score };
+}
+function continuityColor(tier) {
+  return tier === 'green' ? C.green : tier === 'yellow' ? C.yellow : tier === 'orange' ? C.orange : tier === 'red' ? C.red : C.dim;
+}
+
+// Small N / R pill used inline next to athlete names
+function NRBadge({ isReturner, size = 'sm' }) {
+  const isSm = size === 'sm';
+  const bg = isReturner ? 'rgba(94,179,255,0.14)' : 'rgba(249,115,22,0.14)';
+  const fg = isReturner ? C.blueCool : C.orange;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      width: isSm ? 14 : 18, height: isSm ? 14 : 18,
+      background: bg, color: fg,
+      border: `1px solid ${fg}`,
+      borderRadius: 3,
+      fontFamily: fontStack.mono, fontWeight: 700,
+      fontSize: isSm ? 9 : 11, lineHeight: 1,
+      flexShrink: 0,
+    }} title={isReturner ? 'Returner' : 'New athlete'}>
+      {isReturner ? 'R' : 'N'}
+    </span>
+  );
+}
+
+// =============================================================================
+// ATHLETE PHOTO — square crop, click to enlarge, optional upload
+// =============================================================================
+// Sizes available: 'sm' (28px - lists), 'md' (44px - chips), 'lg' (84px - rows), 'xl' (140px - detail header)
+const PHOTO_SIZES = { sm: 28, md: 44, lg: 64, xl: 140 };
+
+function AthletePhoto({ athlete, size = 'md', onEnlarge, onUpload, editable = false }) {
+  const px = PHOTO_SIZES[size];
+  const radius = size === 'sm' ? 4 : size === 'md' ? 5 : size === 'lg' ? 6 : 8;
+  const initials = `${athlete.first[0]}${athlete.last[0]}`.toUpperCase();
+  const colors = athleteColors(athlete);
+
+  const handleClick = (e) => {
+    e.stopPropagation();
+    if (athlete.photo && onEnlarge) {
+      onEnlarge();
+    } else if (!athlete.photo && editable && onUpload) {
+      onUpload();
+    } else if (athlete.photo && !onEnlarge && editable && onUpload) {
+      onUpload();
+    }
+  };
+
+  const interactive = (athlete.photo && onEnlarge) || (editable && onUpload);
+  // Border ring tinted to position color for at-a-glance recognition
+  const borderColor = colors.primary;
+  const borderWidth = size === 'sm' ? 1 : 2;
+
+  if (athlete.photo) {
+    return (
+      <div
+        onClick={interactive ? handleClick : undefined}
+        title={interactive ? 'Click to enlarge' : undefined}
+        style={{
+          width: px, height: px, borderRadius: radius,
+          backgroundImage: `url(${athlete.photo})`,
+          backgroundSize: 'cover', backgroundPosition: 'center',
+          flexShrink: 0, position: 'relative',
+          cursor: interactive ? 'pointer' : 'default',
+          border: `${borderWidth}px solid ${borderColor}`,
+          transition: 'transform 0.1s',
+        }}
+        onMouseEnter={interactive ? (e) => e.currentTarget.style.transform = 'scale(1.04)' : undefined}
+        onMouseLeave={interactive ? (e) => e.currentTarget.style.transform = 'scale(1)' : undefined}
+      >
+        {editable && size !== 'sm' && (
+          <div style={{
+            position: 'absolute', bottom: 4, right: 4,
+            background: 'rgba(0,0,0,0.7)', color: '#fff',
+            borderRadius: 3, padding: 3,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Maximize2 size={size === 'xl' ? 12 : 9} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Initials placeholder — uses position color as background
+  return (
+    <div
+      onClick={editable && onUpload ? handleClick : undefined}
+      title={editable ? 'Click to add photo' : undefined}
+      style={{
+        width: px, height: px, borderRadius: radius,
+        background: colors.primary,
+        color: '#fff', fontFamily: fontStack.display,
+        fontSize: size === 'sm' ? 11 : size === 'md' ? 16 : size === 'lg' ? 22 : 48,
+        letterSpacing: 1,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0, position: 'relative',
+        cursor: editable ? 'pointer' : 'default',
+        border: `${borderWidth}px solid ${borderColor}`,
+        userSelect: 'none',
+        transition: 'transform 0.1s',
+      }}
+      onMouseEnter={editable ? (e) => e.currentTarget.style.transform = 'scale(1.04)' : undefined}
+      onMouseLeave={editable ? (e) => e.currentTarget.style.transform = 'scale(1)' : undefined}
+    >
+      {initials}
+      {editable && size !== 'sm' && (
+        <div style={{
+          position: 'absolute', bottom: 4, right: 4,
+          background: 'rgba(0,0,0,0.5)', color: '#fff',
+          borderRadius: 3, padding: 3,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <Camera size={size === 'xl' ? 14 : 10} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// File picker triggered by editable photo click
+function pickPhoto(onChosen) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.capture = 'user'; // mobile: prefer front camera (athlete-facing capture)
+  input.onchange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => onChosen(ev.target.result);
+    reader.readAsDataURL(file);
+  };
+  input.click();
+}
+
+// PHOTO LIGHTBOX — click any photo to open this
+function PhotoLightbox({ athlete, onClose, onReplace }) {
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 200,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+      cursor: 'pointer',
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: '#000', borderRadius: 8, overflow: 'hidden',
+        maxWidth: '90vw', maxHeight: '90vh',
+        display: 'flex', flexDirection: 'column',
+        cursor: 'default',
+      }}>
+        <div style={{
+          padding: 14, background: '#111', display: 'flex', alignItems: 'center', gap: 12,
+          borderBottom: '1px solid #222',
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ color: '#fff', fontFamily: fontStack.display, fontSize: 22, letterSpacing: 1, lineHeight: 1 }}>
+              {athlete.first.toUpperCase()} {athlete.last.toUpperCase()}
+            </div>
+            <div style={{ color: '#999', fontSize: 11, letterSpacing: 1.5, textTransform: 'uppercase', marginTop: 4, fontFamily: fontStack.mono }}>
+              #{athlete.num} · {athlete.position} · Age {athlete.age}
+            </div>
+          </div>
+          {onReplace && (
+            <button onClick={onReplace} style={{
+              background: '#1a1a1a', border: '1px solid #333', color: '#ddd',
+              padding: '8px 12px', borderRadius: 4, cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12,
+              letterSpacing: 1, textTransform: 'uppercase',
+            }}>
+              <Camera size={14} /> Replace
+            </button>
+          )}
+          <button onClick={onClose} style={{
+            background: 'transparent', border: 'none', color: '#999', cursor: 'pointer', padding: 4,
+          }}>
+            <X size={22} />
+          </button>
+        </div>
+        <div style={{
+          background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          minHeight: 300,
+        }}>
+          <img
+            src={athlete.photo}
+            alt={`${athlete.first} ${athlete.last}`}
+            style={{ maxWidth: '85vw', maxHeight: '70vh', display: 'block', objectFit: 'contain' }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// MAIN APP
+// =============================================================================
+export default function App() {
+  const [athletes, setAthletes] = useState(seedAthletes);
+  const [placements, setPlacements] = useState({});
+  const [finalizedTeams, setFinalizedTeams] = useState({});
+  const [view, setView] = useState('dashboard');
+  const [selectedAthleteId, setSelectedAthleteId] = useState(null);
+  const [selectedTeamId, setSelectedTeamId] = useState('t7');
+  const [finalizeModal, setFinalizeModal] = useState(null);
+
+  // v0.5 state
+  const [currentCoachId, setCurrentCoachId] = useState('c1'); // the "logged in" coach
+  const [viewMode, setViewMode] = useState('consensus'); // 'consensus' | 'coach'
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
+  const [currentProjectId, setCurrentProjectId] = useState('p2026');
+  const [exportModal, setExportModal] = useState(null); // { scope: 'team'|'program', teamId? }
+  const [lightboxAthleteId, setLightboxAthleteId] = useState(null);
+
+  const currentCoach = COACHES.find(c => c.id === currentCoachId);
+
+  // Raw athletes have per-coach rating objects. Resolve them into display-ready
+  // number-keyed form based on current view mode. Everything downstream treats
+  // them as the flat shape from v0.4.
+  const athletesWithPlacement = useMemo(() => athletes.map(a => {
+    const resolved = resolveAthleteRatings(a, viewMode, currentCoachId);
+    return { ...resolved, placedOn: placements[a.id] || [], _raw: a };
+  }), [athletes, placements, viewMode, currentCoachId]);
+
+  const updateAthlete = (id, patch) => {
+    setAthletes(prev => prev.map(a => a.id === id ? { ...a, ...patch } : a));
+  };
+
+  // v0.3: No more silent auto-fix. If you exceed the limit, it stays and turns red.
+  const placeAthlete = (athleteId, teamId) => {
+    if (finalizedTeams[teamId]) return; // locked
+    setPlacements(prev => {
+      const current = prev[athleteId] || [];
+      if (current.includes(teamId)) {
+        return { ...prev, [athleteId]: current.filter(t => t !== teamId) };
+      }
+      return { ...prev, [athleteId]: [...current, teamId] };
+    });
+  };
+
+  const removeFromTeam = (athleteId, teamId) => {
+    if (finalizedTeams[teamId]) return;
+    setPlacements(prev => ({ ...prev, [athleteId]: (prev[athleteId] || []).filter(t => t !== teamId) }));
+  };
+
+  const finalizeTeam = (teamId) => {
+    setFinalizedTeams(prev => ({ ...prev, [teamId]: true }));
+    setFinalizeModal(null);
+  };
+  const unfinalizeTeam = (teamId) => {
+    setFinalizedTeams(prev => { const next = { ...prev }; delete next[teamId]; return next; });
+  };
+  const finalizeProgram = () => {
+    const all = {};
+    TEAMS.forEach(t => { all[t.id] = true; });
+    setFinalizedTeams(all);
+    setFinalizeModal(null);
+  };
+
+  // Photo handlers
+  const enlargePhoto = (athleteId) => {
+    const a = athletes.find(x => x.id === athleteId);
+    if (a?.photo) setLightboxAthleteId(athleteId);
+  };
+  const uploadPhoto = (athleteId) => {
+    pickPhoto((dataUrl) => {
+      updateAthlete(athleteId, { photo: dataUrl });
+    });
+  };
+
+  const lightboxAthlete = lightboxAthleteId ? athletes.find(a => a.id === lightboxAthleteId) : null;
+
+  return (
+    <div style={{
+      minHeight: '100vh', background: C.bg, color: C.text,
+      fontFamily: fontStack.body, fontSize: 14,
+      display: 'flex', flexDirection: 'column',
+    }}>
+      <GlobalStyle />
+      <TopBar
+        view={view} setView={setView}
+        athletes={athletesWithPlacement} placements={placements}
+        currentCoach={currentCoach} currentCoachId={currentCoachId} setCurrentCoachId={setCurrentCoachId}
+        viewMode={viewMode} setViewMode={setViewMode}
+        currentProjectId={currentProjectId} setCurrentProjectId={setCurrentProjectId}
+        projectPickerOpen={projectPickerOpen} setProjectPickerOpen={setProjectPickerOpen}
+      />
+      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        {view === 'dashboard' && (
+          <Dashboard
+            athletes={athletesWithPlacement} placements={placements}
+            finalizedTeams={finalizedTeams}
+            setView={setView} setSelectedTeamId={setSelectedTeamId}
+            onProgramFinalize={() => setFinalizeModal({ type: 'program' })}
+            onProgramExport={() => setExportModal({ scope: 'program' })}
+          />
+        )}
+        {view === 'athletes' && (
+          <AthletesView athletes={athletesWithPlacement} updateAthlete={updateAthlete}
+            selectedId={selectedAthleteId} setSelectedId={setSelectedAthleteId} setView={setView}
+            currentCoachId={currentCoachId} currentCoach={currentCoach}
+            onEnlargePhoto={enlargePhoto} onUploadPhoto={uploadPhoto} />
+        )}
+        {view === 'rating' && (
+          <RatingView athletes={athletesWithPlacement} updateAthlete={updateAthlete}
+            selectedId={selectedAthleteId} setSelectedId={setSelectedAthleteId}
+            currentCoachId={currentCoachId} currentCoach={currentCoach}
+            onEnlargePhoto={enlargePhoto} onUploadPhoto={uploadPhoto} />
+        )}
+        {view === 'builder' && (
+          <BuilderView
+            athletes={athletesWithPlacement}
+            selectedTeamId={selectedTeamId} setSelectedTeamId={setSelectedTeamId}
+            placeAthlete={placeAthlete} removeFromTeam={removeFromTeam}
+            updateAthlete={updateAthlete}
+            finalizedTeams={finalizedTeams}
+            onFinalize={() => setFinalizeModal({ type: 'team', teamId: selectedTeamId })}
+            onUnlock={unfinalizeTeam}
+            onExport={() => setExportModal({ scope: 'team', teamId: selectedTeamId })}
+            onEnlargePhoto={enlargePhoto}
+          />
+        )}
+      </div>
+
+      {exportModal && (
+        <ExportModal
+          modal={exportModal}
+          athletes={athletesWithPlacement}
+          onClose={() => setExportModal(null)}
+        />
+      )}
+
+      {finalizeModal && (
+        <FinalizeModal
+          modal={finalizeModal}
+          athletes={athletesWithPlacement}
+          finalizedTeams={finalizedTeams}
+          onConfirmTeam={finalizeTeam}
+          onConfirmProgram={finalizeProgram}
+          onClose={() => setFinalizeModal(null)}
+        />
+      )}
+
+      {lightboxAthlete && (
+        <PhotoLightbox
+          athlete={lightboxAthlete}
+          onClose={() => setLightboxAthleteId(null)}
+          onReplace={() => uploadPhoto(lightboxAthlete.id)}
+        />
+      )}
+    </div>
+  );
+}
+
+function GlobalStyle() {
+  return (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: ${C.bg}; }
+      ::-webkit-scrollbar-thumb { background: ${C.line2}; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: ${C.dim2}; }
+      input[type=range] { -webkit-appearance: none; appearance: none; height: 4px; background: ${C.line2}; border-radius: 2px; outline: none; }
+      input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; background: ${C.accent}; border-radius: 50%; cursor: pointer; border: 2px solid ${C.bg}; }
+      input[type=range]::-moz-range-thumb { width: 16px; height: 16px; background: ${C.accent}; border-radius: 50%; cursor: pointer; border: 2px solid ${C.bg}; }
+      button { font-family: inherit; }
+      @keyframes pulse-red { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.6); } 50% { box-shadow: 0 0 0 4px rgba(239,68,68,0); } }
+    `}</style>
+  );
+}
+
+// =============================================================================
+// TOP BAR
+// =============================================================================
+function TopBar({
+  view, setView, athletes, placements,
+  currentCoach, currentCoachId, setCurrentCoachId,
+  viewMode, setViewMode,
+  currentProjectId, setCurrentProjectId,
+  projectPickerOpen, setProjectPickerOpen,
+}) {
+  const overPlacedCount = athletes.filter(isOverPlaced).length;
+  const currentProject = PROJECTS.find(p => p.id === currentProjectId);
+  const tabs = [
+    { id: 'dashboard', label: 'Dashboard', icon: Activity },
+    { id: 'athletes',  label: 'Athletes',  icon: Users },
+    { id: 'rating',    label: 'Rate',      icon: Star },
+    { id: 'builder',   label: 'Build',     icon: LayoutGrid },
+  ];
+  return (
+    <div style={{
+      borderBottom: `1px solid ${C.line}`, background: C.panel,
+      padding: '14px 24px', display: 'flex', alignItems: 'center', gap: 24,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ width: 8, height: 28, background: C.accent, transform: 'skewX(-12deg)' }} />
+        <div>
+          <div style={{ fontFamily: fontStack.display, fontSize: 22, letterSpacing: 1.5, lineHeight: 1 }}>
+            CLAYTON CHEER ELITE
+          </div>
+          <div style={{ position: 'relative', marginTop: 3 }}>
+            <button
+              onClick={() => setProjectPickerOpen(!projectPickerOpen)}
+              style={{
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: C.dim, fontSize: 10, letterSpacing: 1.5, textTransform: 'uppercase',
+                padding: 0, display: 'inline-flex', alignItems: 'center', gap: 4,
+                fontFamily: 'inherit',
+              }}
+            >
+              <FolderOpen size={10} />
+              {currentProject.name}
+              <ChevronDown size={10} />
+            </button>
+            {projectPickerOpen && (
+              <>
+                <div onClick={() => setProjectPickerOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                <div style={{
+                  position: 'absolute', top: 20, left: 0, minWidth: 260, zIndex: 50,
+                  background: C.panel2, border: `1px solid ${C.line2}`, borderRadius: 6,
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                }}>
+                  <div style={{ padding: '8px 12px', fontSize: 9, color: C.dim2, letterSpacing: 1.5, textTransform: 'uppercase', borderBottom: `1px solid ${C.line}` }}>
+                    Projects
+                  </div>
+                  {PROJECTS.map(p => (
+                    <button key={p.id} onClick={() => { setCurrentProjectId(p.id); setProjectPickerOpen(false); }} style={{
+                      display: 'block', width: '100%', textAlign: 'left', border: 'none',
+                      background: p.id === currentProjectId ? C.panel : 'transparent',
+                      borderLeft: `3px solid ${p.id === currentProjectId ? C.accent : 'transparent'}`,
+                      padding: '10px 12px', color: C.text, cursor: 'pointer', fontFamily: 'inherit',
+                    }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {p.name}
+                        {p.active && <span style={{ fontSize: 9, color: C.green, letterSpacing: 1, textTransform: 'uppercase' }}>Active</span>}
+                        {p.archived && <span style={{ fontSize: 9, color: C.dim2, letterSpacing: 1, textTransform: 'uppercase' }}>Archived</span>}
+                      </div>
+                      <div style={{ fontSize: 10, color: C.dim, marginTop: 2 }}>{p.season} · {p.athleteCount} athletes</div>
+                    </button>
+                  ))}
+                  <div style={{ borderTop: `1px solid ${C.line}`, padding: '8px 12px' }}>
+                    <button style={{
+                      background: 'transparent', border: `1px dashed ${C.line2}`, color: C.dim,
+                      width: '100%', padding: '6px 10px', borderRadius: 4, cursor: 'pointer',
+                      fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', fontFamily: 'inherit',
+                    }}>+ New project</button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, display: 'flex', gap: 4 }}>
+        {tabs.map(t => {
+          const Icon = t.icon;
+          const active = view === t.id;
+          return (
+            <button key={t.id} onClick={() => setView(t.id)} style={{
+              background: active ? C.panel2 : 'transparent',
+              border: `1px solid ${active ? C.line2 : 'transparent'}`,
+              color: active ? C.text : C.dim,
+              padding: '8px 16px', borderRadius: 6, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: 8,
+              fontWeight: 500, fontSize: 13, transition: 'all 0.15s',
+            }}>
+              <Icon size={15} />{t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{
+        display: 'flex', background: C.panel2, borderRadius: 5,
+        border: `1px solid ${C.line}`, padding: 2,
+      }} title="Switch between consensus (all coaches averaged) and just your ratings">
+        <button onClick={() => setViewMode('consensus')} style={{
+          background: viewMode === 'consensus' ? C.line2 : 'transparent',
+          color: viewMode === 'consensus' ? C.text : C.dim,
+          border: 'none', padding: '5px 10px', borderRadius: 3, cursor: 'pointer',
+          fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', fontWeight: 500,
+        }}>Consensus</button>
+        <button onClick={() => setViewMode('coach')} style={{
+          background: viewMode === 'coach' ? currentCoach.color : 'transparent',
+          color: viewMode === 'coach' ? '#0d0f10' : C.dim,
+          border: 'none', padding: '5px 10px', borderRadius: 3, cursor: 'pointer',
+          fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', fontWeight: 500,
+        }}>{currentCoach.first}'s View</button>
+      </div>
+
+      {overPlacedCount > 0 && (
+        <div style={{
+          padding: '5px 10px', background: 'rgba(239,68,68,0.12)', color: C.red,
+          borderRadius: 4, fontSize: 11, letterSpacing: 1, textTransform: 'uppercase',
+          display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600,
+          border: `1px solid ${C.red}`,
+        }}>
+          <AlertCircle size={13} /> {overPlacedCount} over-placed
+        </div>
+      )}
+
+      <CoachSwitcher currentCoachId={currentCoachId} setCurrentCoachId={setCurrentCoachId} />
+    </div>
+  );
+}
+
+function CoachSwitcher({ currentCoachId, setCurrentCoachId }) {
+  const [open, setOpen] = useState(false);
+  const current = COACHES.find(c => c.id === currentCoachId);
+  return (
+    <div style={{ position: 'relative' }}>
+      <button onClick={() => setOpen(!open)} style={{
+        background: C.panel2, border: `1px solid ${current.color}55`,
+        padding: '6px 10px 6px 6px', borderRadius: 4, cursor: 'pointer',
+        display: 'flex', alignItems: 'center', gap: 8,
+        color: C.text, fontFamily: 'inherit',
+      }}>
+        <div style={{
+          width: 22, height: 22, borderRadius: '50%',
+          background: current.color, color: '#0d0f10',
+          fontSize: 10, fontWeight: 700, fontFamily: fontStack.mono,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>{current.initials}</div>
+        <div style={{ fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', textAlign: 'left' }}>
+          <div>{current.first}</div>
+          <div style={{ fontSize: 8, color: C.dim2, letterSpacing: 1.5 }}>{current.role}</div>
+        </div>
+        <ChevronDown size={12} color={C.dim} />
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{
+            position: 'absolute', top: 40, right: 0, minWidth: 220, zIndex: 50,
+            background: C.panel2, border: `1px solid ${C.line2}`, borderRadius: 6,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+          }}>
+            <div style={{ padding: '8px 12px', fontSize: 9, color: C.dim2, letterSpacing: 1.5, textTransform: 'uppercase', borderBottom: `1px solid ${C.line}` }}>
+              Switch active coach
+            </div>
+            {COACHES.map(c => (
+              <button key={c.id} onClick={() => { setCurrentCoachId(c.id); setOpen(false); }} style={{
+                display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+                background: c.id === currentCoachId ? C.panel : 'transparent',
+                border: 'none', padding: '10px 12px', cursor: 'pointer', fontFamily: 'inherit',
+              }}>
+                <div style={{
+                  width: 26, height: 26, borderRadius: '50%',
+                  background: c.color, color: '#0d0f10',
+                  fontSize: 10, fontWeight: 700, fontFamily: fontStack.mono,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>{c.initials}</div>
+                <div style={{ textAlign: 'left', flex: 1 }}>
+                  <div style={{ color: C.text, fontSize: 13, fontWeight: 500 }}>{c.first}</div>
+                  <div style={{ color: C.dim, fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', marginTop: 2 }}>{c.role}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value }) {
+  return (
+    <div style={{ textAlign: 'center', lineHeight: 1.1 }}>
+      <div style={{ fontFamily: fontStack.display, fontSize: 22, color: C.accent }}>{value}</div>
+      <div style={{ fontSize: 9, color: C.dim, letterSpacing: 1.5, textTransform: 'uppercase' }}>{label}</div>
+    </div>
+  );
+}
+
+// =============================================================================
+// TEAM HEALTH MATH (unchanged from v0.2)
+// =============================================================================
+function computeTeamHealth(team, roster) {
+  const count = roster.length;
+  const fill = count / team.sizeTarget;
+
+  const posCounts = POSITIONS.reduce((acc, p) => ({...acc, [p]: roster.filter(a => a.position === p).length}), {});
+  const posTargets = {
+    'Main Base': Math.ceil(team.sizeTarget * 0.25),
+    'Side Base': Math.ceil(team.sizeTarget * 0.25),
+    'Backspot':  Math.ceil(team.sizeTarget * 0.20),
+    'Flyer':     Math.ceil(team.sizeTarget * 0.20),
+    'Extra':     Math.ceil(team.sizeTarget * 0.10),
+  };
+  const posFills = POSITIONS.reduce((acc, p) => {
+    const have = posCounts[p]; const need = posTargets[p];
+    acc[p] = need === 0 ? 100 : Math.min(100, Math.round((have / need) * 100));
+    return acc;
+  }, {});
+  const posScore = POSITIONS.reduce((s, p) => s + Math.min(posCounts[p], posTargets[p]), 0)
+                 / POSITIONS.reduce((s, p) => s + posTargets[p], 0) * 100;
+
+  // Intangibles — average only of athletes who have a real rating (>0).
+  // Athletes with 0 (no consensus = all coaches said unknown) are excluded entirely.
+  const avgOf = (key) => {
+    const vals = roster.map(a => a.intangibles[key]).filter(v => v > 0);
+    return vals.length === 0 ? 0 : vals.reduce((s, v) => s + v, 0) / vals.length;
+  };
+  const culture = count === 0 ? 0 : (avgOf('attitude') + avgOf('reliability') + avgOf('attendance') + avgOf('coachability')) / 4;
+  const leaders = roster.filter(a => a.intangibles.leadership >= 8).length;
+  const followers = roster.filter(a => a.intangibles.leadership > 0 && a.intangibles.leadership <= 3).length;
+  const leadershipBalance = count === 0 ? 0 : Math.max(0, 100 - Math.abs((leaders/count) - 0.25) * 200 - (followers/count) * 100);
+  // How many athletes have any unknowns on their intangibles? Surface this so coaches know how shaky the chemistry score is
+  const unknownIntangibleCount = roster.filter(a => Object.values(a.intangibles).some(v => v === 0)).length;
+
+  // SCORESHEET — split: Level drives Max-Out, Execution drives Execution Quality.
+  // For skills with hasLevel = true: an athlete only counts toward Max-Out if their
+  // level >= team's threshold. For Jumps (no level), every athlete counts.
+  // Execution Quality always uses the dedicated execution rating, averaged across
+  // athletes rated 5+ on execution (per Willie's spec back in v0.2).
+  const req = getMaxOutRequirements(team);
+  const scoresheet = {};
+  Object.entries(req).forEach(([key, { need, threshold, label, hasLevel }]) => {
+    // Max-Out qualifying — by level (if applicable) or everyone (jumps)
+    const qualifyingForMax = hasLevel
+      ? roster.filter(a => (a.skills[key]?.level || 0) >= threshold)
+      : roster.filter(a => a.skills[key]); // everyone on roster counts toward jumps
+    const have = qualifyingForMax.length;
+    const maxPct = need === 0 ? 100 : Math.min(100, Math.round((have / need) * 100));
+
+    // Execution Quality — average execution rating of athletes rated 5+
+    const execQualifiers = roster.filter(a => (a.skills[key]?.execution || 0) >= 5);
+    const execAvg = execQualifiers.length === 0 ? 0
+      : execQualifiers.reduce((s, a) => s + a.skills[key].execution, 0) / execQualifiers.length;
+    const execPct = execAvg === 0 ? 0 : Math.round(execAvg * 10);
+
+    scoresheet[key] = {
+      label, need, have, threshold, maxPct, hasLevel,
+      execAvg, execPct, qualifierCount: execQualifiers.length,
+    };
+  });
+  const scoresheetMaxAvg = Math.round(Object.values(scoresheet).reduce((s, x) => s + x.maxPct, 0) / 4);
+  const scoresheetExecAvg = Math.round(Object.values(scoresheet).reduce((s, x) => s + x.execPct, 0) / 4);
+
+  const avgAge = count === 0 ? 0 : roster.reduce((s,a) => s+a.age, 0) / count;
+  const gridSpan = team.ageMax - team.ageMin;
+  const maturity = count === 0 ? 0 : ((avgAge - team.ageMin) / gridSpan) * 100;
+  const avgExp = count === 0 ? 0 : roster.reduce((s,a) => s+a.yearsExp, 0) / count;
+
+  const continuity = cultureContinuity(roster);
+
+  const overall = Math.round(
+    (scoresheetMaxAvg * 0.25) + (scoresheetExecAvg * 0.25) +
+    (posScore * 0.20) + (culture * 10 * 0.10) +
+    (leadershipBalance * 0.05) + (Math.min(100, fill * 100) * 0.10) +
+    (continuity.score * 0.05)
+  );
+
+  return {
+    count, fill, posCounts, posTargets, posFills, posScore,
+    culture, leaders, followers, leadershipBalance, unknownIntangibleCount,
+    scoresheet, scoresheetMaxAvg, scoresheetExecAvg,
+    avgAge, maturity, avgExp, continuity, overall,
+  };
+}
+
+function gradeColor(score) {
+  if (score >= 85) return C.green;
+  if (score >= 50) return C.yellow;
+  return C.red;
+}
+function gradeColorMaxOut(score) {
+  if (score >= 100) return C.green;
+  if (score >= 60) return C.yellow;
+  return C.red;
+}
+
+// =============================================================================
+// FINALIZATION VALIDATION
+// =============================================================================
+// Hard blocks prevent finalization. Soft warnings show but are overrideable.
+function validateTeamForFinalize(team, athletes, placements) {
+  const roster = athletes.filter(a => (placements[a.id] || []).includes(team.id));
+  const h = computeTeamHealth(team, roster);
+  const blocks = []; const warnings = [];
+
+  // HARD BLOCKS
+  const overPlaced = roster.filter(isOverPlaced);
+  if (overPlaced.length > 0) {
+    blocks.push({
+      type: 'overplacement',
+      msg: `${overPlaced.length} athlete${overPlaced.length > 1 ? 's' : ''} exceed their placement limit`,
+      detail: overPlaced.map(a => `#${a.num} ${a.first} ${a.last} is on ${a.placedOn.length} teams (limit ${placementLimit(a)})`),
+    });
+  }
+
+  if (roster.length < team.sizeTarget) {
+    blocks.push({
+      type: 'roster-short',
+      msg: `Roster below target (${roster.length} of ${team.sizeTarget})`,
+      detail: [`Need ${team.sizeTarget - roster.length} more athletes.`],
+    });
+  }
+
+  // Empty position groups — except Extras (per Willie's rule)
+  POSITIONS.filter(p => p !== 'Extra').forEach(pos => {
+    if (h.posCounts[pos] === 0) {
+      blocks.push({
+        type: 'empty-position',
+        msg: `No ${pos}s on roster`,
+        detail: [`Every team needs at least one ${pos.toLowerCase()}.`],
+      });
+    }
+  });
+
+  // SOFT WARNINGS
+  if (h.scoresheetMaxAvg < 100) {
+    const unmaxed = Object.entries(h.scoresheet).filter(([_, s]) => s.maxPct < 100);
+    warnings.push({
+      type: 'not-maxed',
+      msg: `Scoresheet not maxed (${h.scoresheetMaxAvg}% average)`,
+      detail: unmaxed.map(([_, s]) => `${s.label}: ${s.have}/${s.need}`),
+    });
+  }
+  if (h.culture * 10 < 50) {
+    warnings.push({
+      type: 'weak-culture',
+      msg: `Culture score is low (${Math.round(h.culture*10)}/100)`,
+      detail: ['Attitude, reliability, attendance, or coachability averages are weak.'],
+    });
+  }
+  if (h.leadershipBalance < 50) {
+    warnings.push({
+      type: 'leadership',
+      msg: `Leadership balance is off (${Math.round(h.leadershipBalance)}/100)`,
+      detail: [`${h.leaders} leaders · ${h.followers} followers on roster.`],
+    });
+  }
+
+  // Culture continuity — warn when >75% new
+  if (h.continuity.pctNew > 75 && roster.length > 0) {
+    warnings.push({
+      type: 'new-density',
+      msg: `Culture ramp-up risk (${Math.round(h.continuity.pctNew)}% new athletes)`,
+      detail: [
+        `${h.continuity.newCount} new · ${h.continuity.returnerCount} returner${h.continuity.returnerCount === 1 ? '' : 's'}.`,
+        `New athletes still need to adopt CCE culture. Expect extra coaching investment.`,
+      ],
+    });
+  }
+
+  return { blocks, warnings, health: h, canFinalize: blocks.length === 0 };
+}
+
+// =============================================================================
+// DASHBOARD
+// =============================================================================
+function Dashboard({ athletes, placements, finalizedTeams, setView, setSelectedTeamId, onProgramFinalize, onProgramExport }) {
+  const placedCount = Object.values(placements).filter(v => v.length > 0).length;
+  const unplaced = athletes.length - placedCount;
+  const crossoverRequests = athletes.filter(a => a.wantsCrossover).length;
+  const overPlaced = athletes.filter(isOverPlaced);
+
+  // Can we finalize the whole program?
+  const allTeamValidation = TEAMS.map(t => validateTeamForFinalize(t, athletes, placements));
+  const allTeamsPass = allTeamValidation.every(v => v.canFinalize);
+  const totalBlocks = allTeamValidation.reduce((s, v) => s + v.blocks.length, 0);
+  const finalizedCount = Object.keys(finalizedTeams).length;
+  const allFinalized = finalizedCount === TEAMS.length;
+  const returnerCount = athletes.filter(a => a.isReturner).length;
+  const newCount = athletes.length - returnerCount;
+
+  return (
+    <div style={{ flex: 1, padding: 28, overflowY: 'auto' }}>
+      <SectionHeader title="Program Overview" sub="Snapshot across all 2026 tryout teams" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
+        <BigStat label="Athletes registered" value={athletes.length} hint={`${returnerCount}R · ${newCount}N`} />
+        <BigStat label="Placed on rosters" value={placedCount} hint={`${Math.round(placedCount/athletes.length*100)}% of pool`} />
+        <BigStat label="Crossover requests" value={crossoverRequests} hint="Eligible for 2 teams" />
+        <BigStat label="Finalized teams" value={`${finalizedCount}/${TEAMS.length}`} hint={allFinalized ? 'All locked' : 'In progress'} />
+      </div>
+
+      {/* OVER-PLACEMENT BANNER */}
+      {overPlaced.length > 0 && (
+        <div style={{
+          background: 'rgba(239,68,68,0.08)', border: `1px solid ${C.red}`, borderRadius: 8,
+          padding: 16, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 14,
+        }}>
+          <AlertCircle size={22} color={C.red} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600, color: C.red, fontSize: 14 }}>
+              {overPlaced.length} athlete{overPlaced.length > 1 ? 's' : ''} over placement limit
+            </div>
+            <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>
+              {overPlaced.slice(0, 4).map(a => `#${a.num} ${a.first} ${a.last}`).join(' · ')}
+              {overPlaced.length > 4 && ` · +${overPlaced.length - 4} more`}
+            </div>
+          </div>
+          <button onClick={() => setView('athletes')} style={{ ...secondaryBtn, borderColor: C.red, color: C.red }}>
+            Review
+          </button>
+        </div>
+      )}
+
+      {/* PROGRAM FINALIZE */}
+      <div style={{
+        background: allFinalized ? 'rgba(62,207,142,0.08)' : allTeamsPass ? C.panel : C.panel,
+        border: `1px solid ${allFinalized ? C.green : allTeamsPass ? C.accent : C.line}`,
+        borderRadius: 8, padding: 18, marginBottom: 28,
+        display: 'flex', alignItems: 'center', gap: 16,
+      }}>
+        {allFinalized ? <ShieldCheck size={28} color={C.green} /> :
+         allTeamsPass ? <CheckCircle2 size={28} color={C.accent} /> :
+         <Lock size={28} color={C.dim} />}
+        <div style={{ flex: 1 }}>
+          <div style={{ fontFamily: fontStack.display, fontSize: 18, letterSpacing: 1 }}>
+            {allFinalized ? 'SEASON LOCKED' : allTeamsPass ? 'READY TO FINALIZE' : 'PROGRAM NOT READY'}
+          </div>
+          <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>
+            {allFinalized
+              ? 'All 9 teams have been finalized. Season rosters are locked.'
+              : allTeamsPass
+              ? 'Every team passes validation. Click to lock all rosters for the season.'
+              : `${totalBlocks} issue${totalBlocks !== 1 ? 's' : ''} across teams must be resolved before finalization.`
+            }
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onProgramExport} style={{
+            background: C.panel2, color: C.text, border: `1px solid ${C.line2}`,
+            padding: '10px 16px', borderRadius: 4, cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12,
+            letterSpacing: 1.5, textTransform: 'uppercase', fontWeight: 600,
+          }}>
+            <FileDown size={14} /> Export Season
+          </button>
+          <button
+            onClick={onProgramFinalize}
+            disabled={!allTeamsPass || allFinalized}
+            style={{
+              background: allFinalized ? C.green : allTeamsPass ? C.accent : C.panel2,
+              color: allFinalized || allTeamsPass ? '#fff' : C.dim2,
+              border: 'none', padding: '10px 20px', borderRadius: 4,
+              cursor: (allTeamsPass && !allFinalized) ? 'pointer' : 'not-allowed',
+              display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12,
+              letterSpacing: 1.5, textTransform: 'uppercase', fontWeight: 600,
+            }}
+          >
+            {allFinalized ? <><ShieldCheck size={14} /> Locked</> : <><Lock size={14} /> Finalize All Rosters</>}
+          </button>
+        </div>
+      </div>
+
+      <SectionHeader title="Team Health" sub="Live scoring — click any team to open the builder" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+        {TEAMS.map((team, i) => (
+          <TeamHealthCard
+            key={team.id}
+            team={team}
+            athletes={athletes}
+            placements={placements}
+            finalized={!!finalizedTeams[team.id]}
+            validation={allTeamValidation[i]}
+            onOpen={() => { setSelectedTeamId(team.id); setView('builder'); }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SectionHeader({ title, sub }) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontFamily: fontStack.display, fontSize: 22, letterSpacing: 1 }}>{title}</div>
+      {sub && <div style={{ color: C.dim, fontSize: 12, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function BigStat({ label, value, hint }) {
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 18 }}>
+      <div style={{ fontSize: 10, color: C.dim, letterSpacing: 2, textTransform: 'uppercase' }}>{label}</div>
+      <div style={{ fontFamily: fontStack.display, fontSize: 44, color: C.text, letterSpacing: 1, lineHeight: 1, marginTop: 6 }}>{value}</div>
+      {hint && <div style={{ fontSize: 11, color: C.dim2, marginTop: 4 }}>{hint}</div>}
+    </div>
+  );
+}
+
+function TeamHealthCard({ team, athletes, placements, finalized, validation, onOpen }) {
+  const roster = athletes.filter(a => (placements[a.id] || []).includes(team.id));
+  const h = validation.health;
+  const color = gradeColor(h.overall);
+  const hasBlocks = validation.blocks.length > 0;
+
+  return (
+    <button onClick={onOpen} style={{
+      position: 'relative',
+      textAlign: 'left', width: '100%',
+      background: finalized ? 'rgba(62,207,142,0.05)' : C.panel,
+      border: `1px solid ${finalized ? C.green : hasBlocks ? C.red : C.line}`,
+      borderRadius: 8, padding: 16, cursor: 'pointer', color: C.text,
+      transition: 'border-color 0.15s',
+    }}>
+      {finalized && (
+        <div style={{
+          position: 'absolute', top: 10, right: 10,
+          background: C.green, color: '#fff', borderRadius: 3, padding: '3px 6px',
+          fontSize: 9, letterSpacing: 1, textTransform: 'uppercase', fontWeight: 600,
+          display: 'flex', alignItems: 'center', gap: 4,
+        }}><Lock size={10} /> Locked</div>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+        <div>
+          <div style={{ fontFamily: fontStack.display, fontSize: 18, letterSpacing: 0.5 }}>{team.name.toUpperCase()}</div>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: 1.5, textTransform: 'uppercase', marginTop: 2 }}>
+            L{team.level} · {team.type} · Ages {team.ageMin}–{team.ageMax} · {team.scoresheet === 'open' ? 'Open' : 'Varsity'}
+          </div>
+        </div>
+        <div style={{ textAlign: 'right', marginTop: finalized ? 20 : 0 }}>
+          <div style={{ fontFamily: fontStack.display, fontSize: 32, color, lineHeight: 1 }}>{h.overall || '—'}</div>
+          <div style={{ fontSize: 9, color: C.dim, letterSpacing: 1.5, textTransform: 'uppercase' }}>Health</div>
+        </div>
+      </div>
+
+      {hasBlocks && !finalized && (
+        <div style={{
+          marginBottom: 8, padding: '5px 8px', background: 'rgba(239,68,68,0.1)',
+          borderRadius: 3, fontSize: 10, color: C.red, letterSpacing: 0.5,
+          display: 'flex', alignItems: 'center', gap: 5,
+        }}>
+          <AlertCircle size={11} /> {validation.blocks.length} issue{validation.blocks.length > 1 ? 's' : ''} to fix
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 5, marginBottom: 10, fontSize: 10, flexWrap: 'wrap' }}>
+        <Pill label={`${h.count}/${team.sizeTarget}`} tone={h.fill >= 1 ? 'ok' : h.fill >= 0.8 ? 'warn' : 'bad'} />
+        {POSITIONS.map(p => {
+          const palette = POSITION_COLORS[p];
+          const filled = h.posCounts[p];
+          const target = h.posTargets[p];
+          const met = filled >= target;
+          return (
+            <div key={p} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              background: palette.tint,
+              border: `1px solid ${palette.border}`,
+              color: palette.primary,
+              padding: '3px 6px', borderRadius: 4,
+              fontFamily: fontStack.mono, fontSize: 10, fontWeight: 600,
+              letterSpacing: 0.3,
+            }}>
+              <span>{POS_ABBR[p]}</span>
+              <span style={{ color: met ? C.green : palette.primary }}>{filled}/{target}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      <MiniBar label="Scoresheet Max-Out" value={h.scoresheetMaxAvg} strict />
+      <MiniBar label="Execution Quality" value={h.scoresheetExecAvg} />
+      <MiniBar label="Culture" value={Math.round(h.culture * 10)} />
+      <MiniBar label="Leadership Balance" value={Math.max(0, Math.round(h.leadershipBalance))} />
+      <CultureContinuityBlock continuity={h.continuity} />
+
+      <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 6, color: C.accent, fontSize: 11, letterSpacing: 1, textTransform: 'uppercase' }}>
+        Open roster <ChevronRight size={13} />
+      </div>
+    </button>
+  );
+}
+
+function Pill({ label, tone = 'neutral' }) {
+  const bg = tone === 'ok' ? 'rgba(62,207,142,0.1)' : tone === 'warn' ? 'rgba(245,194,76,0.12)' : tone === 'bad' ? 'rgba(239,68,68,0.12)' : C.panel2;
+  const fg = tone === 'ok' ? C.green : tone === 'warn' ? C.yellow : tone === 'bad' ? C.red : C.dim;
+  return (
+    <div style={{ background: bg, color: fg, padding: '3px 7px', borderRadius: 4, fontFamily: fontStack.mono, fontSize: 10, fontWeight: 500, letterSpacing: 0.3 }}>
+      {label}
+    </div>
+  );
+}
+
+function MiniBar({ label, value, strict = false }) {
+  const color = strict ? gradeColorMaxOut(value) : gradeColor(value);
+  return (
+    <div style={{ marginTop: 7 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: C.dim, marginBottom: 3, letterSpacing: 0.5 }}>
+        <span style={{ textTransform: 'uppercase', letterSpacing: 1 }}>{label}</span>
+        <span style={{ fontFamily: fontStack.mono, color }}>{value}{strict ? '%' : ''}</span>
+      </div>
+      <div style={{ height: 3, background: C.line, borderRadius: 2, overflow: 'hidden' }}>
+        <div style={{ width: `${Math.min(100, value)}%`, height: '100%', background: color, transition: 'width 0.3s' }} />
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// ATHLETES LIST VIEW
+// =============================================================================
+function AthletesView({ athletes, updateAthlete, selectedId, setSelectedId, setView, currentCoachId, currentCoach, onEnlargePhoto, onUploadPhoto }) {
+  const [search, setSearch] = useState('');
+  const [filterPos, setFilterPos] = useState('all');
+  const [filterNR, setFilterNR] = useState('all'); // all | new | returner
+  const [showOnlyOverPlaced, setShowOnlyOverPlaced] = useState(false);
+
+  const filtered = athletes.filter(a => {
+    const matchesSearch = !search ||
+      `${a.first} ${a.last}`.toLowerCase().includes(search.toLowerCase()) ||
+      a.num.toString().includes(search);
+    const matchesPos = filterPos === 'all' || a.position === filterPos;
+    const matchesNR = filterNR === 'all' || (filterNR === 'new' ? !a.isReturner : a.isReturner);
+    const matchesOver = !showOnlyOverPlaced || isOverPlaced(a);
+    return matchesSearch && matchesPos && matchesNR && matchesOver;
+  });
+
+  const selected = athletes.find(a => a.id === selectedId) || filtered[0];
+  const overPlacedCount = athletes.filter(isOverPlaced).length;
+
+  return (
+    <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+      <div style={{ width: 360, borderRight: `1px solid ${C.line}`, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: 16, borderBottom: `1px solid ${C.line}` }}>
+          <div style={{ position: 'relative', marginBottom: 10 }}>
+            <Search size={14} style={{ position: 'absolute', left: 10, top: 10, color: C.dim }} />
+            <input
+              value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search name or tryout #"
+              style={{
+                width: '100%', background: C.panel2, border: `1px solid ${C.line}`, color: C.text,
+                padding: '8px 10px 8px 32px', borderRadius: 4, fontSize: 13, outline: 'none', fontFamily: fontStack.body,
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
+            <FilterChip label="All" active={filterPos === 'all'} onClick={() => setFilterPos('all')} />
+            {POSITIONS.map(p => (
+              <FilterChip key={p} label={POS_ABBR[p]} active={filterPos === p} onClick={() => setFilterPos(p)} />
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+            <FilterChip label="All athletes" active={filterNR === 'all'} onClick={() => setFilterNR('all')} />
+            <button onClick={() => setFilterNR(filterNR === 'new' ? 'all' : 'new')} style={{
+              background: filterNR === 'new' ? C.orange : 'rgba(249,115,22,0.1)',
+              color: filterNR === 'new' ? '#fff' : C.orange,
+              border: `1px solid ${C.orange}`,
+              padding: '5px 10px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+              letterSpacing: 1, textTransform: 'uppercase', fontWeight: 600,
+            }}>N Only</button>
+            <button onClick={() => setFilterNR(filterNR === 'returner' ? 'all' : 'returner')} style={{
+              background: filterNR === 'returner' ? C.blueCool : 'rgba(94,179,255,0.1)',
+              color: filterNR === 'returner' ? '#0d0f10' : C.blueCool,
+              border: `1px solid ${C.blueCool}`,
+              padding: '5px 10px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+              letterSpacing: 1, textTransform: 'uppercase', fontWeight: 600,
+            }}>R Only</button>
+          </div>
+          {overPlacedCount > 0 && (
+            <button onClick={() => setShowOnlyOverPlaced(!showOnlyOverPlaced)} style={{
+              width: '100%', background: showOnlyOverPlaced ? C.red : 'rgba(239,68,68,0.1)',
+              color: showOnlyOverPlaced ? '#fff' : C.red,
+              border: `1px solid ${C.red}`,
+              padding: '7px 10px', borderRadius: 4, cursor: 'pointer',
+              fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', fontWeight: 600,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            }}>
+              <AlertCircle size={12} /> {overPlacedCount} over-placed {showOnlyOverPlaced && '· clear filter'}
+            </button>
+          )}
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {filtered.map(a => (
+            <AthleteRow key={a.id} a={a} selected={a.id === selected?.id} onClick={() => setSelectedId(a.id)}
+              onEnlargePhoto={() => onEnlargePhoto(a.id)} onUploadPhoto={() => onUploadPhoto(a.id)} />
+          ))}
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {selected ? (
+          <AthleteDetail a={selected} updateAthlete={updateAthlete} setView={setView} setSelectedId={setSelectedId}
+            currentCoachId={currentCoachId} currentCoach={currentCoach}
+            onEnlargePhoto={() => onEnlargePhoto(selected.id)} onUploadPhoto={() => onUploadPhoto(selected.id)} />
+        ) : (
+          <div style={{ padding: 40, color: C.dim }}>Select an athlete.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FilterChip({ label, active, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      background: active ? C.accent : C.panel2,
+      color: active ? '#fff' : C.dim,
+      border: `1px solid ${active ? C.accent : C.line}`,
+      padding: '5px 10px', borderRadius: 4, fontSize: 11, cursor: 'pointer',
+      letterSpacing: 1, textTransform: 'uppercase',
+    }}>{label}</button>
+  );
+}
+
+function AthleteRow({ a, selected, onClick, onEnlargePhoto, onUploadPhoto }) {
+  const overall = athleteOverallScore(a);
+  const over = isOverPlaced(a);
+  const colors = athleteColors(a);
+  // When selected: show selection accent. Otherwise: show position color stripe.
+  const stripeColor = over ? C.red : selected ? C.accent : colors.primary;
+  // Light tint on the row, stronger when selected
+  const bg = over ? 'rgba(220,38,38,0.06)' : selected ? colors.tint : 'transparent';
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12, width: '100%',
+      background: bg,
+      borderLeft: `3px solid ${stripeColor}`,
+      borderBottom: `1px solid ${C.line}`,
+      padding: '10px 12px 10px 16px', color: C.text, textAlign: 'left',
+    }}>
+      <AthletePhoto athlete={a} size="md" onEnlarge={onEnlargePhoto} onUpload={onUploadPhoto} editable />
+      <button onClick={onClick} style={{
+        flex: 1, display: 'flex', alignItems: 'center', gap: 12,
+        background: 'transparent', border: 'none', cursor: 'pointer',
+        padding: 0, textAlign: 'left', color: 'inherit', minWidth: 0,
+      }}>
+        <div style={{ fontFamily: fontStack.mono, fontSize: 13, color: C.dim, width: 38 }}>#{a.num}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 500, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <NRBadge isReturner={a.isReturner} />
+            {a.first} {a.last}
+            {over && <AlertCircle size={13} color={C.red} />}
+          </div>
+          <div style={{ fontSize: 10, color: over ? C.red : C.dim, letterSpacing: 1, textTransform: 'uppercase', marginTop: 2 }}>
+            {a.age}y · {POS_ABBR[a.position]} · {a.yearsExp}yr
+            {a.wantsCrossover && <span style={{ color: over ? C.red : C.accent, marginLeft: 6 }}>⇄ XO</span>}
+            {over && <span style={{ marginLeft: 6, fontWeight: 600 }}>· on {a.placedOn.length} teams (max {placementLimit(a)})</span>}
+          </div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontFamily: fontStack.display, fontSize: 18, color: gradeColor(overall), lineHeight: 1 }}>{overall}</div>
+          {a.placedOn.length > 0 && !over && (
+            <div style={{ fontSize: 9, color: C.accent, letterSpacing: 1, textTransform: 'uppercase', marginTop: 2 }}>
+              {a.placedOn.length === 1 ? 'Placed' : `×${a.placedOn.length}`}
+            </div>
+          )}
+        </div>
+      </button>
+    </div>
+  );
+}
+
+// Color override controls — recolor card to current position OR pick a manual color.
+function ColorOverridePanel({ a, updateAthlete }) {
+  const currentColor = a.colorPosition || a.originalPosition || a.position;
+  const isCustomized = a.colorPosition && a.colorPosition !== a.originalPosition;
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16 }}>
+      <div style={{ fontSize: 10, color: C.dim, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>Card Color</div>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+        {POSITIONS.map(p => {
+          const palette = POSITION_COLORS[p];
+          const active = currentColor === p;
+          return (
+            <button
+              key={p}
+              onClick={() => updateAthlete(a.id, { colorPosition: p })}
+              title={`${p} — ${palette.label}`}
+              style={{
+                flex: 1, height: 32, borderRadius: 4, cursor: 'pointer',
+                background: palette.primary,
+                border: `2px solid ${active ? C.text : 'transparent'}`,
+                outline: active ? `1px solid ${palette.primary}` : 'none',
+                outlineOffset: 1,
+              }}
+            />
+          );
+        })}
+      </div>
+      {a.position !== currentColor && (
+        <button
+          onClick={() => updateAthlete(a.id, { colorPosition: a.position })}
+          style={{
+            width: '100%', background: C.panel2, color: C.text,
+            border: `1px solid ${C.line2}`,
+            padding: '6px 10px', borderRadius: 4, cursor: 'pointer',
+            fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', fontWeight: 500,
+            fontFamily: 'inherit',
+          }}
+        >
+          Match to current ({a.position})
+        </button>
+      )}
+      {isCustomized && a.position === currentColor && (
+        <div style={{ fontSize: 10, color: C.dim2, letterSpacing: 0.5, fontStyle: 'italic' }}>
+          Customized — was {a.originalPosition}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AthleteDetail({ a, updateAthlete, setView, setSelectedId, currentCoachId, currentCoach, onEnlargePhoto, onUploadPhoto }) {
+  const placedTeams = TEAMS.filter(t => a.placedOn.includes(t.id));
+  const over = isOverPlaced(a);
+  return (
+    <div style={{ padding: 28 }}>
+      {over && (
+        <div style={{
+          background: 'rgba(239,68,68,0.1)', border: `1px solid ${C.red}`, borderRadius: 6,
+          padding: 12, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <AlertCircle size={18} color={C.red} />
+          <div style={{ fontSize: 12, color: C.red, fontWeight: 600, lineHeight: 1.4 }}>
+            This athlete is on {a.placedOn.length} teams. Their limit is {placementLimit(a)}
+            ({a.wantsCrossover ? 'crossover enabled' : 'single-team only'}).
+            Remove them from {a.placedOn.length - placementLimit(a)} team{a.placedOn.length - placementLimit(a) > 1 ? 's' : ''} or enable crossover.
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24, gap: 20 }}>
+        <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+          <AthletePhoto athlete={a} size="xl" onEnlarge={onEnlargePhoto} onUpload={onUploadPhoto} editable />
+          <div>
+            <div style={{ fontFamily: fontStack.mono, color: C.dim, fontSize: 13 }}>#{a.num}</div>
+            <div style={{ fontFamily: fontStack.display, fontSize: 42, letterSpacing: 1.5, lineHeight: 1, marginTop: 4, display: 'flex', alignItems: 'center', gap: 12 }}>
+              {a.first.toUpperCase()} {a.last.toUpperCase()}
+              <NRBadge isReturner={a.isReturner} size="lg" />
+            </div>
+            <div style={{ color: C.dim, fontSize: 12, letterSpacing: 1, textTransform: 'uppercase', marginTop: 6 }}>
+              {a.age} years old · {a.position} · {a.yearsExp} years experience
+              <span style={{ color: a.isReturner ? C.blueCool : C.orange, marginLeft: 10 }}>
+                · {a.isReturner ? 'Returner' : 'New athlete'}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => { setSelectedId(a.id); setView('rating'); }} style={primaryBtn}>
+            <Star size={14} /> Rate
+          </button>
+          <button style={secondaryBtn}>
+            <Video size={14} /> Videos ({a.videos})
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
+        <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: C.dim, letterSpacing: 2, textTransform: 'uppercase' }}>Current Position</div>
+            {a.originalPosition && a.position !== a.originalPosition && (
+              <div style={{ fontSize: 9, color: C.dim2, letterSpacing: 1, textTransform: 'uppercase' }}>
+                Originally {a.originalPosition}
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {POSITIONS.map(p => {
+              const palette = POSITION_COLORS[p];
+              const active = a.position === p;
+              return (
+                <button key={p} onClick={() => updateAthlete(a.id, { position: p })} style={{
+                  background: active ? palette.primary : C.panel2,
+                  color: active ? '#fff' : C.dim,
+                  border: `1px solid ${active ? palette.primary : C.line}`,
+                  padding: '8px 14px', borderRadius: 4, fontSize: 12, cursor: 'pointer',
+                  letterSpacing: 1, textTransform: 'uppercase', fontWeight: 500,
+                }}>{p}</button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16 }}>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>Athlete History</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={() => updateAthlete(a.id, { isReturner: false })} style={{
+              flex: 1,
+              background: !a.isReturner ? C.orange : C.panel2,
+              color: !a.isReturner ? '#fff' : C.dim,
+              border: `1px solid ${!a.isReturner ? C.orange : C.line}`,
+              padding: '10px 14px', borderRadius: 4, fontSize: 12, cursor: 'pointer',
+              letterSpacing: 1, textTransform: 'uppercase', fontWeight: 600,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            }}>
+              <span style={{ fontFamily: fontStack.mono, fontSize: 14 }}>N</span> New
+            </button>
+            <button onClick={() => updateAthlete(a.id, { isReturner: true })} style={{
+              flex: 1,
+              background: a.isReturner ? C.blueCool : C.panel2,
+              color: a.isReturner ? '#fff' : C.dim,
+              border: `1px solid ${a.isReturner ? C.blueCool : C.line}`,
+              padding: '10px 14px', borderRadius: 4, fontSize: 12, cursor: 'pointer',
+              letterSpacing: 1, textTransform: 'uppercase', fontWeight: 600,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            }}>
+              <span style={{ fontFamily: fontStack.mono, fontSize: 14 }}>R</span> Returner
+            </button>
+          </div>
+        </div>
+
+        <ColorOverridePanel a={a} updateAthlete={updateAthlete} />
+      </div>
+
+      <div style={{
+        background: a.wantsCrossover ? 'rgba(255,77,46,0.08)' : C.panel,
+        border: `1px solid ${a.wantsCrossover ? C.accent : C.line}`,
+        borderRadius: 8, padding: 16, marginBottom: 20,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Repeat size={18} color={a.wantsCrossover ? C.accent : C.dim} />
+          <div>
+            <div style={{ fontWeight: 600 }}>Available for crossover</div>
+            <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>
+              {a.wantsCrossover ? 'Can be placed on up to 2 teams' : 'Single-team only'}
+            </div>
+          </div>
+        </div>
+        <Toggle on={a.wantsCrossover} onChange={v => updateAthlete(a.id, { wantsCrossover: v })} />
+      </div>
+
+      {placedTeams.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>
+            Currently placed on · {placedTeams.length} / {placementLimit(a)}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {placedTeams.map(t => (
+              <div key={t.id} style={{
+                background: C.panel, border: `1px solid ${over ? C.red : C.accent}`,
+                padding: '8px 14px', borderRadius: 4, fontSize: 12, fontWeight: 500,
+              }}>{t.name}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <SectionHeader title="Physical" sub="Each skill rated on Level (USASF) and Execution (1-10 quality)" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 28 }}>
+        {Object.entries(a.skills).map(([k, v]) => <ReadOnlySkill key={k} label={humanize(k)} value={v} skillKey={k} />)}
+      </div>
+
+      <SectionHeader title="Intangibles" sub="The things CheerSync doesn't measure — Unknown is OK if unsure" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 28 }}>
+        {Object.entries(a.intangibles).map(([k, v]) => <ReadOnlyIntangible key={k} label={humanize(k)} value={v} />)}
+      </div>
+
+      <NotesSection
+        athlete={a}
+        updateAthlete={updateAthlete}
+        currentCoachId={currentCoachId}
+        currentCoach={currentCoach}
+      />
+    </div>
+  );
+}
+
+// Timestamped, coach-attributed notes per athlete
+function NotesSection({ athlete, updateAthlete, currentCoachId, currentCoach }) {
+  const [draft, setDraft] = useState('');
+  const raw = athlete._raw || athlete;
+  const notes = raw.notes || [];
+
+  const addNote = () => {
+    if (!draft.trim()) return;
+    const newNote = {
+      id: `n${Date.now()}`,
+      coachId: currentCoachId,
+      timestamp: new Date().toISOString(),
+      text: draft.trim(),
+    };
+    updateAthlete(athlete.id, { notes: [newNote, ...notes] });
+    setDraft('');
+  };
+  const deleteNote = (id) => {
+    updateAthlete(athlete.id, { notes: notes.filter(n => n.id !== id) });
+  };
+
+  return (
+    <>
+      <SectionHeader title="Notes" sub="Coach observations — visible to all staff" />
+      <div style={{
+        background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8,
+        padding: 14, marginBottom: 10,
+      }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <div style={{
+            width: 30, height: 30, borderRadius: '50%', flexShrink: 0,
+            background: currentCoach.color, color: '#0d0f10',
+            fontSize: 11, fontWeight: 700, fontFamily: fontStack.mono,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>{currentCoach.initials}</div>
+          <textarea
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addNote(); }}
+            placeholder={`Add a note as ${currentCoach.first}... (⌘/Ctrl+Enter to save)`}
+            rows={2}
+            style={{
+              flex: 1, background: C.panel2, color: C.text,
+              border: `1px solid ${C.line}`, borderRadius: 4,
+              padding: 10, fontFamily: fontStack.body, fontSize: 13,
+              outline: 'none', resize: 'vertical',
+            }}
+          />
+          <button
+            onClick={addNote}
+            disabled={!draft.trim()}
+            style={{
+              background: draft.trim() ? C.accent : C.panel2,
+              color: draft.trim() ? '#fff' : C.dim2,
+              border: 'none', padding: '8px 16px', borderRadius: 4,
+              cursor: draft.trim() ? 'pointer' : 'not-allowed',
+              fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', fontWeight: 600,
+              alignSelf: 'stretch',
+            }}
+          >Save</button>
+        </div>
+      </div>
+
+      {notes.length === 0 ? (
+        <div style={{ color: C.dim2, fontSize: 12, textAlign: 'center', padding: 20, fontStyle: 'italic' }}>
+          No notes yet. Add the first observation about this athlete.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {notes.map(n => {
+            const author = COACHES.find(c => c.id === n.coachId);
+            const ts = new Date(n.timestamp);
+            const tsShort = ts.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' · ' +
+                            ts.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+            return (
+              <div key={n.id} style={{
+                background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6,
+                padding: 12, display: 'flex', gap: 10,
+              }}>
+                <div style={{
+                  width: 26, height: 26, borderRadius: '50%', flexShrink: 0,
+                  background: author?.color || C.dim2, color: '#0d0f10',
+                  fontSize: 10, fontWeight: 700, fontFamily: fontStack.mono,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>{author?.initials || '??'}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: author?.color || C.text }}>{author?.first || 'Unknown'}</div>
+                    <div style={{ fontSize: 10, color: C.dim2, letterSpacing: 0.5 }}>{tsShort}</div>
+                  </div>
+                  <div style={{ fontSize: 13, color: C.text, marginTop: 3, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                    {n.text}
+                  </div>
+                </div>
+                {n.coachId === currentCoachId && (
+                  <button onClick={() => deleteNote(n.id)} style={{
+                    background: 'transparent', border: 'none', color: C.dim2,
+                    cursor: 'pointer', padding: 4, alignSelf: 'flex-start',
+                  }} title="Delete your note"><X size={13} /></button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+function humanize(k) {
+  const map = {
+    standingTumble: 'Standing Tumble', runningTumble: 'Running Tumble',
+    jumps: 'Jumps', stunts: 'Stunts',
+    leadership: 'Leadership', attitude: 'Attitude', reliability: 'Reliability',
+    attendance: 'Attendance', coachability: 'Coachability',
+    workEthic: 'Work Ethic', pressure: 'Pressure',
+  };
+  return map[k] || k;
+}
+
+// Read-only skill display — shows Level (if applicable) AND Execution
+function ReadOnlySkill({ label, value, skillKey }) {
+  // value is { level?: number, execution?: number } from resolved athlete
+  const def = SKILL_DEFS[skillKey];
+  const hasLevel = def?.hasLevel;
+  const hasExecution = def?.hasExecution;
+  const levelVal = value?.level || 0;
+  const execVal = value?.execution || 0;
+
+  const levelColor = levelVal === 0 ? C.dim2
+              : levelVal < 1.5 ? C.red
+              : levelVal < 2.5 ? C.orange
+              : levelVal < 3.5 ? C.yellow
+              : levelVal < 4.5 ? '#9bd14b'
+              : C.green;
+  const execColor = execVal === 0 ? C.dim2 : gradeColor(execVal * 10);
+
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12 }}>
+      <div style={{ fontSize: 11, color: C.dim, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 }}>{label}</div>
+      <div style={{ display: 'flex', gap: 12 }}>
+        {hasLevel && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 9, color: C.dim2, letterSpacing: 1.5, textTransform: 'uppercase' }}>Level</div>
+            <div style={{ fontFamily: fontStack.display, fontSize: 22, color: levelColor, lineHeight: 1, marginTop: 2 }}>
+              {levelVal > 0 ? `L${levelVal.toFixed(1)}` : '—'}
+            </div>
+            <div style={{ height: 3, background: C.line, borderRadius: 2, marginTop: 6 }}>
+              <div style={{ width: `${(levelVal / SKILL_LEVEL_MAX) * 100}%`, height: '100%', background: levelColor, borderRadius: 2 }} />
+            </div>
+          </div>
+        )}
+        {hasExecution && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 9, color: C.dim2, letterSpacing: 1.5, textTransform: 'uppercase' }}>Execution</div>
+            <div style={{ fontFamily: fontStack.display, fontSize: 22, color: execColor, lineHeight: 1, marginTop: 2 }}>
+              {execVal > 0 ? execVal.toFixed(1) : '—'}
+            </div>
+            <div style={{ height: 3, background: C.line, borderRadius: 2, marginTop: 6 }}>
+              <div style={{ width: `${(execVal / 10) * 100}%`, height: '100%', background: execColor, borderRadius: 2 }} />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Read-only intangible — 1-10 scale with possible 0 = no data
+function ReadOnlyIntangible({ label, value }) {
+  const isUnknown = value === 0;
+  const color = isUnknown ? C.dim2 : gradeColor(value * 10);
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+        <div style={{ fontSize: 11, color: C.dim, letterSpacing: 1, textTransform: 'uppercase' }}>{label}</div>
+        <div style={{ fontFamily: fontStack.display, fontSize: 20, color, lineHeight: 1 }}>
+          {isUnknown ? '?' : value.toFixed(1)}
+        </div>
+      </div>
+      <div style={{ height: 3, background: C.line, borderRadius: 2 }}>
+        <div style={{ width: `${(value / 10) * 100}%`, height: '100%', background: color, borderRadius: 2 }} />
+      </div>
+      {isUnknown && (
+        <div style={{ fontSize: 9, color: C.orange, letterSpacing: 1, textTransform: 'uppercase', marginTop: 4 }}>
+          Unknown
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Toggle({ on, onChange }) {
+  return (
+    <button onClick={() => onChange(!on)} style={{
+      width: 44, height: 24, borderRadius: 12, position: 'relative',
+      background: on ? C.accent : C.line2, border: 'none', cursor: 'pointer', transition: 'background 0.2s',
+      boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.08)',
+    }}>
+      <div style={{
+        position: 'absolute', top: 2, left: on ? 22 : 2,
+        width: 20, height: 20, borderRadius: 10, background: '#fff', transition: 'left 0.2s',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+      }} />
+    </button>
+  );
+}
+
+// =============================================================================
+// RATING VIEW
+// =============================================================================
+function RatingView({ athletes, updateAthlete, selectedId, setSelectedId, currentCoachId, currentCoach, onEnlargePhoto, onUploadPhoto }) {
+  const selected = athletes.find(a => a.id === selectedId) || athletes[0];
+  if (!selected) return <div style={{ padding: 40, color: C.dim }}>No athletes.</div>;
+
+  const raw = selected._raw;
+  const idx = athletes.findIndex(a => a.id === selected.id);
+  const next = () => setSelectedId(athletes[(idx + 1) % athletes.length].id);
+  const prev = () => setSelectedId(athletes[(idx - 1 + athletes.length) % athletes.length].id);
+
+  // Writes the current coach's rating into the per-coach object
+  // component is 'level' or 'execution' depending on which slider was moved
+  const setSkillComponent = (key, component, val) => {
+    const skill = raw.skills[key] || {};
+    const componentObj = skill[component] || {};
+    const updatedComponent = { ...componentObj, [currentCoachId]: val };
+    const updatedSkill = { ...skill, [component]: updatedComponent };
+    updateAthlete(selected.id, { skills: { ...raw.skills, [key]: updatedSkill } });
+  };
+  const setIntangible = (key, val) => {
+    const updated = { ...raw.intangibles[key], [currentCoachId]: val };
+    updateAthlete(selected.id, { intangibles: { ...raw.intangibles, [key]: updated } });
+  };
+
+  return (
+    <div style={{ flex: 1, padding: 28, overflowY: 'auto' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, padding: 10,
+        background: `${currentCoach.color}12`, border: `1px solid ${currentCoach.color}66`,
+        borderRadius: 6, marginBottom: 20, fontSize: 12,
+      }}>
+        <UserCircle size={16} color={currentCoach.color} />
+        <span style={{ color: C.dim }}>Rating as</span>
+        <strong style={{ color: currentCoach.color }}>{currentCoach.first}</strong>
+        <span style={{ color: C.dim2 }}>· sliders write to your column only — switch coach in the top bar to see others' ratings</span>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24 }}>
+        <button onClick={prev} style={secondaryBtn}>← Prev</button>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 18 }}>
+          <AthletePhoto athlete={selected} size="lg" onEnlarge={() => onEnlargePhoto(selected.id)} onUpload={() => onUploadPhoto(selected.id)} editable />
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ fontFamily: fontStack.mono, color: C.dim, fontSize: 12 }}>#{selected.num}  ·  {idx+1} of {athletes.length}</div>
+            <div style={{ fontFamily: fontStack.display, fontSize: 36, letterSpacing: 1.5, lineHeight: 1, marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+              {selected.first.toUpperCase()} {selected.last.toUpperCase()}
+              <NRBadge isReturner={selected.isReturner} size="lg" />
+            </div>
+            <div style={{ color: C.dim, fontSize: 12, letterSpacing: 1, textTransform: 'uppercase', marginTop: 4 }}>
+              {selected.age}y · {selected.position} · {selected.yearsExp}yr exp
+            </div>
+          </div>
+        </div>
+        <button onClick={next} style={primaryBtn}>Next →</button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+        <RatingPanel title="PHYSICAL" subtitle="Level (what they have) + Execution (how clean it is)">
+          {SKILL_KEYS.map(k => {
+            const def = SKILL_DEFS[k];
+            const skill = raw.skills[k] || {};
+            return (
+              <SkillBlock
+                key={k}
+                label={def.label}
+                skillKey={k}
+                hasLevel={def.hasLevel}
+                hasExecution={def.hasExecution}
+                levelObj={skill.level}
+                executionObj={skill.execution}
+                currentCoachId={currentCoachId}
+                onChangeLevel={val => setSkillComponent(k, 'level', val)}
+                onChangeExecution={val => setSkillComponent(k, 'execution', val)}
+              />
+            );
+          })}
+          <div style={{ marginTop: 14, padding: 12, background: C.panel2, borderRadius: 6, border: `1px dashed ${C.line2}`, textAlign: 'center' }}>
+            <Video size={18} style={{ color: C.dim, marginBottom: 4 }} />
+            <div style={{ fontSize: 11, color: C.dim, letterSpacing: 1, textTransform: 'uppercase' }}>Record · Tag skill after</div>
+          </div>
+        </RatingPanel>
+        <RatingPanel title="INTANGIBLES" subtitle="Use Unknown if you haven't seen the athlete enough to judge">
+          {Object.entries(raw.intangibles).map(([k, obj]) => (
+            <IntangibleSlider key={k} label={humanize(k)} ratingObj={obj}
+              currentCoachId={currentCoachId} onChange={val => setIntangible(k, val)} />
+          ))}
+        </RatingPanel>
+      </div>
+    </div>
+  );
+}
+
+function RatingPanel({ title, subtitle, children }) {
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 20 }}>
+      <div style={{ borderBottom: `1px solid ${C.line}`, paddingBottom: 10, marginBottom: 14 }}>
+        <div style={{ fontFamily: fontStack.display, fontSize: 18, letterSpacing: 2 }}>{title}</div>
+        <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>{subtitle}</div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// SKILL BLOCK — wraps Level + Execution sliders for one skill. For Jumps, only execution.
+function SkillBlock({ label, skillKey, hasLevel, hasExecution, levelObj, executionObj, currentCoachId, onChangeLevel, onChangeExecution }) {
+  return (
+    <div style={{
+      background: C.panel2, border: `1px solid ${C.line}`,
+      borderRadius: 6, padding: 12, marginBottom: 12,
+    }}>
+      <div style={{
+        fontSize: 12, color: C.text, fontWeight: 600,
+        letterSpacing: 1, textTransform: 'uppercase',
+        marginBottom: 10, paddingBottom: 6, borderBottom: `1px solid ${C.line}`,
+      }}>{label}</div>
+      {hasLevel && (
+        <SkillSlider
+          subLabel="Level"
+          skillKey={skillKey}
+          ratingObj={levelObj || {}}
+          currentCoachId={currentCoachId}
+          onChange={onChangeLevel}
+        />
+      )}
+      {hasExecution && (
+        <ExecutionSlider
+          subLabel="Execution"
+          ratingObj={executionObj || {}}
+          currentCoachId={currentCoachId}
+          onChange={onChangeExecution}
+        />
+      )}
+    </div>
+  );
+}
+
+// SKILL SLIDER — level-scaled (Unrated, L1, L2, L3, L4, L5, L6/Open). Used inside SkillBlock.
+function SkillSlider({ subLabel, skillKey, ratingObj, currentCoachId, onChange }) {
+  const myValue = ratingObj[currentCoachId] ?? 0;
+  const consensus = consensusRating(ratingObj, 'skill');
+  const spread = ratingSpread(ratingObj, 'skill');
+  const disagreement = hasDisagreement(ratingObj, 'skill');
+  const raters = ratingValues(ratingObj, 'skill').length;
+  const myLevel = SKILL_LEVELS.find(l => l.value === myValue);
+  const desc = myValue > 0 && SKILL_LEVEL_DESC[skillKey] ? SKILL_LEVEL_DESC[skillKey][myValue] : null;
+  // Level-based color: grade improves with level
+  const levelColor = myValue === 0 ? C.dim2
+                   : myValue <= 1 ? C.red
+                   : myValue <= 2 ? C.orange
+                   : myValue <= 3 ? C.yellow
+                   : myValue <= 4 ? '#9bd14b'
+                   : C.green;
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+        <div style={{ fontSize: 10, color: C.dim, letterSpacing: 1.5, textTransform: 'uppercase', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
+          {subLabel}
+          {disagreement && (
+            <span style={{
+              background: 'rgba(245,194,76,0.18)', color: C.yellow,
+              fontSize: 9, padding: '1px 5px', borderRadius: 3, letterSpacing: 0.5,
+              display: 'inline-flex', alignItems: 'center', gap: 3, fontWeight: 600,
+            }} title={`Coaches differ by ${spread} level${spread === 1 ? '' : 's'}`}>
+              <AlertTriangle size={9} /> DISAGREE
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          {raters > 1 && (
+            <div style={{ fontSize: 10, color: C.dim2, fontFamily: fontStack.mono }}>
+              avg L{consensus.toFixed(1)}
+            </div>
+          )}
+          <div style={{ fontFamily: fontStack.display, fontSize: 22, color: levelColor, lineHeight: 1, minWidth: 40, textAlign: 'right' }}>
+            {myLevel?.short || '—'}
+          </div>
+        </div>
+      </div>
+      <input type="range" min="0" max={SKILL_LEVEL_MAX} step="1"
+        value={myValue} onChange={e => onChange(parseInt(e.target.value))}
+        style={{ width: '100%' }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: C.dim2, letterSpacing: 1, textTransform: 'uppercase', marginTop: 3 }}>
+        {SKILL_LEVELS.map(l => (
+          <span key={l.value} style={{ color: l.value === myValue ? levelColor : C.dim2, fontWeight: l.value === myValue ? 700 : 400 }}>
+            {l.short}
+          </span>
+        ))}
+      </div>
+      {desc && (
+        <div style={{ fontSize: 10, color: C.dim, marginTop: 4, fontStyle: 'italic' }}>
+          {desc}
+        </div>
+      )}
+      {raters > 0 && (
+        <div style={{ display: 'flex', gap: 4, marginTop: 5 }}>
+          {COACHES.filter(c => ratingObj[c.id] !== undefined && ratingObj[c.id] > 0).map(c => (
+            <div key={c.id} title={`${c.first}: Level ${ratingObj[c.id]}`} style={{
+              fontSize: 9, fontFamily: fontStack.mono,
+              background: c.color + '22', color: c.color, border: `1px solid ${c.color}44`,
+              padding: '1px 4px', borderRadius: 3,
+            }}>
+              {c.initials} L{ratingObj[c.id]}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// EXECUTION SLIDER — 1-10 scale, no Unknown. Used for skill execution and Jumps execution.
+function ExecutionSlider({ subLabel, ratingObj, currentCoachId, onChange }) {
+  const myValue = ratingObj[currentCoachId] ?? 5;
+  const consensus = consensusRating(ratingObj, 'execution');
+  const spread = ratingSpread(ratingObj, 'execution');
+  const disagreement = hasDisagreement(ratingObj, 'execution');
+  const raters = ratingValues(ratingObj, 'execution').length;
+  const color = gradeColor(myValue * 10);
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+        <div style={{ fontSize: 10, color: C.dim, letterSpacing: 1.5, textTransform: 'uppercase', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
+          {subLabel}
+          {disagreement && (
+            <span style={{
+              background: 'rgba(245,194,76,0.18)', color: C.yellow,
+              fontSize: 9, padding: '1px 5px', borderRadius: 3, letterSpacing: 0.5,
+              display: 'inline-flex', alignItems: 'center', gap: 3, fontWeight: 600,
+            }} title={`Coaches spread ${spread} points`}>
+              <AlertTriangle size={9} /> DISAGREE
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          {raters > 1 && (
+            <div style={{ fontSize: 10, color: C.dim2, fontFamily: fontStack.mono }}>
+              avg {consensus.toFixed(1)}
+            </div>
+          )}
+          <div style={{ fontFamily: fontStack.display, fontSize: 22, color, lineHeight: 1, minWidth: 40, textAlign: 'right' }}>
+            {myValue}
+          </div>
+        </div>
+      </div>
+      <input type="range" min="1" max="10" step="1"
+        value={myValue} onChange={e => onChange(parseInt(e.target.value))}
+        style={{ width: '100%' }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: C.dim2, letterSpacing: 1, textTransform: 'uppercase', marginTop: 3 }}>
+        <span>Sloppy · 1</span><span>5 · OK</span><span>10 · Clean</span>
+      </div>
+      {raters > 0 && (
+        <div style={{ display: 'flex', gap: 4, marginTop: 5, flexWrap: 'wrap' }}>
+          {COACHES.filter(c => ratingObj[c.id] !== undefined).map(c => (
+            <div key={c.id} title={`${c.first}: ${ratingObj[c.id]}`} style={{
+              fontSize: 9, fontFamily: fontStack.mono,
+              background: c.color + '22', color: c.color, border: `1px solid ${c.color}44`,
+              padding: '1px 4px', borderRadius: 3,
+            }}>
+              {c.initials} {ratingObj[c.id]}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// INTANGIBLE SLIDER — 1-10 with "Unknown" position before 1
+function IntangibleSlider({ label, ratingObj, currentCoachId, onChange }) {
+  const myValue = ratingObj[currentCoachId] ?? INTANGIBLE_UNKNOWN;
+  const consensus = consensusRating(ratingObj, 'intangible');
+  const spread = ratingSpread(ratingObj, 'intangible');
+  const disagreement = hasDisagreement(ratingObj, 'intangible');
+  const raters = ratingValues(ratingObj, 'intangible').length;
+  const isUnknown = myValue === INTANGIBLE_UNKNOWN;
+  const color = isUnknown ? C.dim2 : gradeColor(myValue * 10);
+  // Use slider value 0 to represent Unknown so the slider handle has a position
+  const sliderValue = isUnknown ? 0 : myValue;
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+        <div style={{ fontSize: 12, color: C.text, letterSpacing: 0.5, textTransform: 'uppercase', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
+          {label}
+          {disagreement && (
+            <span style={{
+              background: 'rgba(245,194,76,0.18)', color: C.yellow,
+              fontSize: 9, padding: '2px 5px', borderRadius: 3, letterSpacing: 0.5,
+              display: 'inline-flex', alignItems: 'center', gap: 3, fontWeight: 600,
+            }} title={`Spread of ${spread} points across ${raters} coaches`}>
+              <AlertTriangle size={9} /> DISAGREEMENT
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          {raters > 1 && (
+            <div style={{ fontSize: 10, color: C.dim2, fontFamily: fontStack.mono }}>
+              avg {consensus.toFixed(1)}
+            </div>
+          )}
+          <div style={{ fontFamily: fontStack.display, fontSize: 26, color, lineHeight: 1, minWidth: 60, textAlign: 'right' }}>
+            {isUnknown ? '?' : myValue}
+          </div>
+        </div>
+      </div>
+      <input type="range" min="0" max="10" step="1"
+        value={sliderValue}
+        onChange={e => {
+          const v = parseInt(e.target.value);
+          onChange(v === 0 ? INTANGIBLE_UNKNOWN : v);
+        }}
+        style={{ width: '100%' }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: C.dim2, letterSpacing: 1, textTransform: 'uppercase', marginTop: 3 }}>
+        <span style={{ color: isUnknown ? C.orange : C.dim2, fontWeight: isUnknown ? 700 : 400 }}>Unknown</span>
+        <span>Weak · 1</span>
+        <span>5</span>
+        <span>10 · Elite</span>
+      </div>
+      {raters > 0 && (
+        <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
+          {COACHES.filter(c => ratingObj[c.id] !== undefined).map(c => {
+            const v = ratingObj[c.id];
+            const unk = v === INTANGIBLE_UNKNOWN;
+            return (
+              <div key={c.id} title={`${c.first}: ${unk ? 'Unknown' : v}`} style={{
+                fontSize: 9, fontFamily: fontStack.mono,
+                background: unk ? C.dim2 + '22' : c.color + '22',
+                color: unk ? C.dim2 : c.color,
+                border: `1px solid ${unk ? C.dim2 + '44' : c.color + '44'}`,
+                padding: '1px 4px', borderRadius: 3,
+              }}>
+                {c.initials} {unk ? '?' : v}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// BUILDER VIEW — now with Finalize button + locked state
+// =============================================================================
+function BuilderView({ athletes, selectedTeamId, setSelectedTeamId, placeAthlete, removeFromTeam, updateAthlete, finalizedTeams, onFinalize, onUnlock, onExport, onEnlargePhoto }) {
+  const team = TEAMS.find(t => t.id === selectedTeamId);
+  const roster = athletes.filter(a => a.placedOn.includes(selectedTeamId));
+  const eligible = athletes.filter(a => a.age >= team.ageMin && a.age <= team.ageMax && !a.placedOn.includes(selectedTeamId));
+  const validation = validateTeamForFinalize(team, athletes, Object.fromEntries(athletes.map(a => [a.id, a.placedOn])));
+  const health = validation.health;
+  const isLocked = !!finalizedTeams[selectedTeamId];
+
+  const [filter, setFilter] = useState('all');
+  // Drag state for moving athletes between position groups
+  const [draggingAthleteId, setDraggingAthleteId] = useState(null);
+  const [dragOverPosition, setDragOverPosition] = useState(null);
+
+  const handleDragToPosition = (athleteId, newPosition) => {
+    const athlete = athletes.find(a => a.id === athleteId);
+    if (!athlete || athlete.position === newPosition || isLocked) return;
+    updateAthlete(athleteId, { position: newPosition });
+  };
+
+  const pool = eligible.filter(a => {
+    if (filter === 'crossover') return a.wantsCrossover;
+    if (filter !== 'all') return a.position === filter;
+    return true;
+  }).sort((a,b) => athleteOverallScore(b) - athleteOverallScore(a));
+
+  const rosterOverPlaced = roster.filter(isOverPlaced);
+
+  return (
+    <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+      {/* TEAM PICKER */}
+      <div style={{ width: 220, borderRight: `1px solid ${C.line}`, background: C.panel, overflowY: 'auto' }}>
+        <div style={{ padding: '14px 16px', borderBottom: `1px solid ${C.line}`, fontSize: 10, color: C.dim, letterSpacing: 2, textTransform: 'uppercase' }}>
+          Teams · 2026
+        </div>
+        {TEAMS.map(t => {
+          const r = athletes.filter(a => a.placedOn.includes(t.id));
+          const h = computeTeamHealth(t, r);
+          const color = gradeColor(h.overall);
+          const locked = !!finalizedTeams[t.id];
+          const hasOver = r.some(isOverPlaced);
+          return (
+            <button key={t.id} onClick={() => setSelectedTeamId(t.id)} style={{
+              display: 'block', width: '100%', textAlign: 'left', border: 'none',
+              background: t.id === selectedTeamId ? C.panel2 : 'transparent',
+              borderLeft: `3px solid ${t.id === selectedTeamId ? C.accent : locked ? C.green : 'transparent'}`,
+              borderBottom: `1px solid ${C.line}`,
+              padding: '12px 16px', color: C.text, cursor: 'pointer',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                <div style={{ fontSize: 13, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  {locked && <Lock size={11} color={C.green} />}
+                  {hasOver && <AlertCircle size={11} color={C.red} />}
+                  {t.name}
+                </div>
+                <div style={{ fontFamily: fontStack.display, fontSize: 16, color, lineHeight: 1 }}>{h.overall || '—'}</div>
+              </div>
+              <div style={{ fontSize: 10, color: C.dim, letterSpacing: 1, textTransform: 'uppercase', marginTop: 3 }}>
+                L{t.level} · {r.length}/{t.sizeTarget}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ROSTER */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, borderRight: `1px solid ${C.line}` }}>
+        <div style={{ padding: 18, borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ fontFamily: fontStack.display, fontSize: 26, letterSpacing: 1.5, lineHeight: 1 }}>{team.name.toUpperCase()}</div>
+              {isLocked && (
+                <div style={{
+                  background: C.green, color: '#fff', borderRadius: 3, padding: '3px 8px',
+                  fontSize: 10, letterSpacing: 1.5, textTransform: 'uppercase', fontWeight: 600,
+                  display: 'flex', alignItems: 'center', gap: 4,
+                }}><Lock size={10} /> Locked</div>
+              )}
+            </div>
+            <div style={{ color: C.dim, fontSize: 11, letterSpacing: 1.5, textTransform: 'uppercase', marginTop: 4 }}>
+              Level {team.level} · {team.type} · Ages {team.ageMin}–{team.ageMax} · {team.scoresheet === 'open' ? 'Open (IASF)' : 'United / Varsity'}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={onExport} style={secondaryBtn}>
+              <FileDown size={14} /> Export
+            </button>
+            {isLocked ? (
+              <button onClick={() => onUnlock(team.id)} style={secondaryBtn}>
+                <Unlock size={14} /> Unlock
+              </button>
+            ) : (
+              <button
+                onClick={onFinalize}
+                disabled={!validation.canFinalize}
+                style={{
+                  background: validation.canFinalize ? C.green : C.panel2,
+                  color: validation.canFinalize ? '#fff' : C.dim2,
+                  border: 'none', padding: '10px 18px', borderRadius: 4,
+                  cursor: validation.canFinalize ? 'pointer' : 'not-allowed',
+                  display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12,
+                  letterSpacing: 1.5, textTransform: 'uppercase', fontWeight: 600,
+                }}
+              >
+                <Lock size={14} /> Finalize team
+                {validation.blocks.length > 0 && (
+                  <span style={{
+                    background: 'rgba(220,38,38,0.15)', color: C.red, padding: '1px 6px', borderRadius: 8,
+                    fontSize: 10, marginLeft: 4, fontWeight: 700,
+                  }}>{validation.blocks.length}</span>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {rosterOverPlaced.length > 0 && !isLocked && (
+          <div style={{
+            padding: '10px 16px', background: 'rgba(239,68,68,0.1)',
+            borderBottom: `1px solid ${C.red}`,
+            display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: C.red,
+          }}>
+            <AlertCircle size={14} />
+            <strong>{rosterOverPlaced.length} athlete{rosterOverPlaced.length > 1 ? 's' : ''} on this roster exceed their placement limit.</strong>
+            <span style={{ color: C.dim }}>
+              {rosterOverPlaced.slice(0, 3).map(a => `#${a.num}`).join(' · ')}
+              {rosterOverPlaced.length > 3 && ` +${rosterOverPlaced.length - 3}`}
+            </span>
+          </div>
+        )}
+
+        <div style={{ padding: 14, borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: C.dim, letterSpacing: 1.5, textTransform: 'uppercase', flexWrap: 'wrap' }}>
+          <span>Roster · {roster.length} / {team.sizeTarget}</span>
+          <div style={{ flex: 1 }} />
+          {POSITIONS.map(p => {
+            const palette = POSITION_COLORS[p];
+            const filled = health.posCounts[p];
+            const target = health.posTargets[p];
+            const met = filled >= target;
+            return (
+              <div key={p} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                background: palette.tint,
+                border: `1px solid ${palette.border}`,
+                color: palette.primary,
+                padding: '3px 8px', borderRadius: 4,
+                fontFamily: fontStack.mono, fontSize: 11, fontWeight: 600,
+                letterSpacing: 0.5,
+                opacity: met ? 1 : 0.85,
+              }}>
+                <span>{POS_ABBR[p]}</span>
+                <span style={{ color: met ? C.green : palette.primary }}>{filled}/{target}</span>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 14, opacity: isLocked ? 0.75 : 1 }}>
+          {roster.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 40, color: C.dim2, fontSize: 13 }}>
+              No athletes yet. Click + on anyone in the eligible pool to add them.
+            </div>
+          ) : (
+            POSITIONS.map(pos => {
+              const group = roster.filter(a => a.position === pos);
+              const target = health.posTargets[pos];
+              const filled = group.length;
+              const isRequired = pos !== 'Extra';
+              const statusColor = filled >= target ? C.green : filled >= target * 0.7 ? C.yellow : (isRequired && filled === 0 ? C.red : C.yellow);
+              const isDragOver = dragOverPosition === pos;
+              const positionPalette = POSITION_COLORS[pos];
+              return (
+                <div
+                  key={pos}
+                  onDragOver={(e) => {
+                    if (!draggingAthleteId || isLocked) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    if (dragOverPosition !== pos) setDragOverPosition(pos);
+                  }}
+                  onDragLeave={(e) => {
+                    // Only clear if we're truly leaving (not just entering a child)
+                    if (e.currentTarget.contains(e.relatedTarget)) return;
+                    setDragOverPosition(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (draggingAthleteId && !isLocked) {
+                      handleDragToPosition(draggingAthleteId, pos);
+                    }
+                    setDraggingAthleteId(null);
+                    setDragOverPosition(null);
+                  }}
+                  style={{
+                    marginBottom: 20,
+                    padding: 8,
+                    borderRadius: 8,
+                    background: isDragOver ? positionPalette.tint : 'transparent',
+                    border: isDragOver ? `2px dashed ${positionPalette.primary}` : '2px dashed transparent',
+                    transition: 'background 0.15s, border-color 0.15s',
+                  }}
+                >
+                  <div style={{
+                    display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 8,
+                    paddingBottom: 6, borderBottom: `1px solid ${C.line}`,
+                  }}>
+                    <div style={{ width: 4, height: 14, background: positionPalette.primary, borderRadius: 2 }} />
+                    <div style={{ fontFamily: fontStack.display, fontSize: 14, letterSpacing: 1.5, textTransform: 'uppercase', color: positionPalette.primary }}>{pos}</div>
+                    <div style={{ fontFamily: fontStack.mono, fontSize: 11, color: statusColor, fontWeight: 500 }}>{filled}/{target}</div>
+                    <div style={{ flex: 1 }} />
+                    {isDragOver && (
+                      <div style={{ fontSize: 10, color: positionPalette.primary, letterSpacing: 1, textTransform: 'uppercase', fontWeight: 700 }}>
+                        Drop to move
+                      </div>
+                    )}
+                    {!isDragOver && filled < target && (
+                      <div style={{ fontSize: 10, color: C.dim, letterSpacing: 1, textTransform: 'uppercase' }}>
+                        Need {target - filled} more
+                      </div>
+                    )}
+                    {!isDragOver && isRequired && filled === 0 && (
+                      <div style={{ fontSize: 10, color: C.red, letterSpacing: 1, textTransform: 'uppercase', fontWeight: 600 }}>
+                        Required
+                      </div>
+                    )}
+                  </div>
+                  {group.length === 0 ? (
+                    <div style={{
+                      padding: '14px 4px', color: isRequired ? C.red : C.dim2,
+                      fontSize: 12, fontStyle: 'italic', textAlign: 'center',
+                      border: isDragOver ? 'none' : `1px dashed ${C.line2}`,
+                      borderRadius: 6,
+                    }}>
+                      {isDragOver
+                        ? `Drop here to move to ${pos}`
+                        : isRequired
+                          ? `⚠ No ${pos.toLowerCase()}s placed — team cannot be finalized without at least one`
+                          : `No ${pos.toLowerCase()}s placed yet`}
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 8 }}>
+                      {group.map(a => (
+                        <RosterChip
+                          key={a.id}
+                          a={a}
+                          onRemove={() => removeFromTeam(a.id, team.id)}
+                          disabled={isLocked}
+                          onEnlargePhoto={() => onEnlargePhoto(a.id)}
+                          isDragging={draggingAthleteId === a.id}
+                          onDragStart={() => !isLocked && setDraggingAthleteId(a.id)}
+                          onDragEnd={() => { setDraggingAthleteId(null); setDragOverPosition(null); }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* HEALTH + POOL */}
+      <div style={{ width: 440, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <div style={{ padding: 18, borderBottom: `1px solid ${C.line}`, overflowY: 'auto', maxHeight: '62vh' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
+            <div style={{ fontFamily: fontStack.display, fontSize: 18, letterSpacing: 1 }}>TEAM HEALTH</div>
+            <div style={{ fontFamily: fontStack.display, fontSize: 32, color: gradeColor(health.overall), lineHeight: 1 }}>{health.overall || '—'}</div>
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: C.dim, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>
+              <Target size={12} /> Scoresheet Max-Out
+            </div>
+            {Object.entries(health.scoresheet).map(([k, s]) => <MaxOutRow key={k} skill={s} />)}
+          </div>
+          <div style={{ marginTop: 18 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: C.dim, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>
+              <Gauge size={12} /> Execution Quality
+            </div>
+            {Object.entries(health.scoresheet).map(([k, s]) => <ExecRow key={k} skill={s} />)}
+          </div>
+          <div style={{ marginTop: 18, paddingTop: 14, borderTop: `1px solid ${C.line}` }}>
+            <div style={{ fontSize: 10, color: C.dim, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>Team Chemistry</div>
+            <MiniBar label="Culture" value={Math.round(health.culture*10)} />
+            <MiniBar label="Leadership Balance" value={Math.max(0, Math.round(health.leadershipBalance))} />
+            <CultureContinuityBlock continuity={health.continuity} />
+            {health.unknownIntangibleCount > 0 && (
+              <div style={{
+                marginTop: 10, padding: '6px 8px', background: 'rgba(249,115,22,0.08)',
+                border: `1px solid ${C.orange}33`, borderRadius: 4,
+                fontSize: 10, color: C.orange, letterSpacing: 0.5, lineHeight: 1.4,
+              }}>
+                <strong>{health.unknownIntangibleCount} athlete{health.unknownIntangibleCount !== 1 ? 's' : ''}</strong> on this roster have unrated intangibles. Chemistry score may be incomplete.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ padding: 12, borderBottom: `1px solid ${C.line}`, borderTop: `1px solid ${C.line}`, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          <FilterChip label="All" active={filter === 'all'} onClick={() => setFilter('all')} />
+          {POSITIONS.map(p => (
+            <FilterChip key={p} label={POS_ABBR[p]} active={filter === p} onClick={() => setFilter(p)} />
+          ))}
+          <FilterChip label="XO" active={filter === 'crossover'} onClick={() => setFilter('crossover')} />
+        </div>
+        <div style={{ padding: '8px 14px', borderBottom: `1px solid ${C.line}`, fontSize: 10, color: C.dim, letterSpacing: 1.5, textTransform: 'uppercase' }}>
+          Eligible pool · {pool.length} · sorted by skill
+          {isLocked && <span style={{ color: C.green, marginLeft: 8 }}>· team locked</span>}
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', opacity: isLocked ? 0.4 : 1, pointerEvents: isLocked ? 'none' : 'auto' }}>
+          {pool.map(a => <PoolRow key={a.id} a={a} onAdd={() => placeAthlete(a.id, team.id)} onEnlargePhoto={() => onEnlargePhoto(a.id)} />)}
+          {pool.length === 0 && (
+            <div style={{ padding: 30, textAlign: 'center', color: C.dim2, fontSize: 12 }}>
+              No athletes match this filter in the eligible age range.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MaxOutRow({ skill }) {
+  const color = gradeColorMaxOut(skill.maxPct);
+  return (
+    <div style={{ marginBottom: 9 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 11, marginBottom: 3 }}>
+        <span style={{ color: C.text, letterSpacing: 0.5 }}>{skill.label}</span>
+        <span style={{ fontFamily: fontStack.mono, color }}>
+          {skill.have}/{skill.need}
+          {skill.have >= skill.need && <span style={{ marginLeft: 4, color: C.green }}>✓ MAX</span>}
+        </span>
+      </div>
+      <div style={{ height: 6, background: C.line, borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ width: `${Math.min(100, skill.maxPct)}%`, height: '100%', background: color, transition: 'width 0.3s' }} />
+      </div>
+      <div style={{ fontSize: 9, color: C.dim2, letterSpacing: 0.5, marginTop: 2 }}>
+        Counts athletes at L{skill.threshold}+
+      </div>
+    </div>
+  );
+}
+
+function ExecRow({ skill }) {
+  const color = gradeColor(skill.execPct);
+  const execShown = skill.qualifierCount === 0 ? '—' : `L${skill.execAvg.toFixed(1)}`;
+  return (
+    <div style={{ marginBottom: 7 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: C.dim, marginBottom: 3, letterSpacing: 0.5 }}>
+        <span style={{ textTransform: 'uppercase', letterSpacing: 1 }}>{skill.label}</span>
+        <span style={{ fontFamily: fontStack.mono, color }}>
+          {execShown}
+          {skill.qualifierCount > 0 && <span style={{ color: C.dim2, marginLeft: 4 }}>(n={skill.qualifierCount})</span>}
+        </span>
+      </div>
+      <div style={{ height: 3, background: C.line, borderRadius: 2, overflow: 'hidden' }}>
+        <div style={{ width: `${Math.min(100, skill.execPct)}%`, height: '100%', background: color, transition: 'width 0.3s' }} />
+      </div>
+    </div>
+  );
+}
+
+// Split stacked bar showing returner % vs new %
+function CultureContinuityBlock({ continuity }) {
+  const { pctNew, newCount, returnerCount, tier } = continuity;
+  const color = continuityColor(tier);
+  const total = newCount + returnerCount;
+  const pctReturner = total === 0 ? 0 : (returnerCount / total) * 100;
+  const label =
+    tier === 'green' ? 'Healthy mix' :
+    tier === 'yellow' ? 'Manageable' :
+    tier === 'orange' ? 'Ramp-up risk' :
+    tier === 'red' ? 'Rebuilding year' : '—';
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: C.dim, marginBottom: 4, letterSpacing: 0.5 }}>
+        <span style={{ textTransform: 'uppercase', letterSpacing: 1 }}>Culture Continuity</span>
+        <span style={{ fontFamily: fontStack.mono, color }}>
+          {returnerCount}<span style={{color: C.blueCool}}>R</span> · {newCount}<span style={{color: C.orange}}>N</span>
+        </span>
+      </div>
+      {total > 0 ? (
+        <>
+          <div style={{ height: 6, background: C.line, borderRadius: 3, overflow: 'hidden', display: 'flex' }}>
+            <div style={{ width: `${pctReturner}%`, height: '100%', background: C.blueCool, transition: 'width 0.3s' }} />
+            <div style={{ flex: 1, height: '100%', background: C.orange, transition: 'width 0.3s' }} />
+          </div>
+          <div style={{ fontSize: 9, color, letterSpacing: 1, textTransform: 'uppercase', marginTop: 4, fontWeight: 600 }}>
+            {label} · {Math.round(pctNew)}% new
+          </div>
+        </>
+      ) : (
+        <div style={{ height: 6, background: C.line, borderRadius: 3 }} />
+      )}
+    </div>
+  );
+}
+
+function RosterChip({ a, onRemove, disabled, onEnlargePhoto, isDragging, onDragStart, onDragEnd }) {
+  const overall = athleteOverallScore(a);
+  const over = isOverPlaced(a);
+  const colors = athleteColors(a);
+  // Visual cue when athlete has been moved away from their original position
+  const movedFromOriginal = a.colorPosition && a.position !== a.colorPosition;
+
+  return (
+    <div
+      draggable={!disabled}
+      onDragStart={(e) => {
+        if (disabled) return;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', a.id);
+        if (onDragStart) onDragStart();
+      }}
+      onDragEnd={onDragEnd}
+      style={{
+        background: over ? 'rgba(220,38,38,0.10)' : colors.tint,
+        border: `1px solid ${over ? C.red : colors.border}`,
+        borderLeft: `4px solid ${over ? C.red : colors.primary}`,
+        borderRadius: 6, padding: 10,
+        display: 'flex', alignItems: 'center', gap: 10,
+        cursor: disabled ? 'default' : 'grab',
+        opacity: isDragging ? 0.4 : 1,
+        transition: 'opacity 0.1s',
+      }}
+    >
+      <AthletePhoto athlete={a} size="md" onEnlarge={onEnlargePhoto} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <NRBadge isReturner={a.isReturner} />
+          {a.first} {a.last[0]}.
+          {over && <AlertCircle size={11} color={C.red} />}
+        </div>
+        <div style={{ fontSize: 10, color: over ? C.red : C.dim, letterSpacing: 0.8, textTransform: 'uppercase', marginTop: 1, fontFamily: fontStack.mono }}>
+          #{a.num} · {a.age}y
+          {movedFromOriginal && (
+            <span style={{ color: colors.primary, fontWeight: 700, marginLeft: 4 }} title={`Originally a ${a.colorPosition}`}>
+              · was {POS_ABBR[a.colorPosition]}
+            </span>
+          )}
+          {a.wantsCrossover && <span style={{ color: over ? C.red : C.accent, marginLeft: 4 }}>· XO</span>}
+          {over && <span> · ×{a.placedOn.length}</span>}
+        </div>
+      </div>
+      <div style={{ fontFamily: fontStack.display, fontSize: 16, color: gradeColor(overall), lineHeight: 1 }}>{overall}</div>
+      {!disabled && (
+        <button onClick={onRemove} style={{
+          background: 'transparent', border: 'none', color: C.dim2, cursor: 'pointer', padding: 2,
+        }} title="Remove"><X size={14} /></button>
+      )}
+    </div>
+  );
+}
+
+function PoolRow({ a, onAdd, onEnlargePhoto }) {
+  const overall = athleteOverallScore(a);
+  const over = isOverPlaced(a);
+  const colors = athleteColors(a);
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
+      borderBottom: `1px solid ${C.line}`,
+      borderLeft: `3px solid ${over ? C.red : colors.primary}`,
+      background: over ? 'rgba(220,38,38,0.04)' : 'transparent',
+    }}>
+      <AthletePhoto athlete={a} size="md" onEnlarge={onEnlargePhoto} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 5 }}>
+          <NRBadge isReturner={a.isReturner} />
+          {a.first} {a.last}
+          {over && <AlertCircle size={11} color={C.red} />}
+        </div>
+        <div style={{ fontSize: 10, color: over ? C.red : C.dim, letterSpacing: 0.8, textTransform: 'uppercase', marginTop: 1, fontFamily: fontStack.mono }}>
+          #{a.num} · {POS_ABBR[a.position]} · {a.age}y · {a.yearsExp}yr
+          {a.wantsCrossover && <span style={{ color: over ? C.red : C.accent, marginLeft: 4 }}>· XO</span>}
+          {a.placedOn.length > 0 && <span style={{ color: over ? C.red : C.yellow, marginLeft: 4 }}>· on {a.placedOn.length}</span>}
+        </div>
+      </div>
+      <div style={{ fontFamily: fontStack.display, fontSize: 16, color: gradeColor(overall), lineHeight: 1 }}>{overall}</div>
+      <button onClick={onAdd} style={{
+        background: C.accent, border: 'none', color: '#fff', cursor: 'pointer',
+        width: 26, height: 26, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }} title="Add to team"><Plus size={14} /></button>
+    </div>
+  );
+}
+
+// =============================================================================
+// FINALIZE MODAL
+// =============================================================================
+// =============================================================================
+// EXPORT MODAL — renders a print-friendly view and triggers print (→ save as PDF)
+// =============================================================================
+function ExportModal({ modal, athletes, onClose }) {
+  const isProgram = modal.scope === 'program';
+  const teams = isProgram ? TEAMS : [TEAMS.find(t => t.id === modal.teamId)];
+  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+  const doPrint = () => {
+    // Open a new window with print-ready HTML
+    const win = window.open('', '_blank', 'width=900,height=1200');
+    if (!win) { alert('Popup blocked — allow popups for this site to export.'); return; }
+    win.document.write(buildPrintHTML(teams, athletes, today, isProgram));
+    win.document.close();
+    // Give the window a beat to render, then trigger print
+    setTimeout(() => { win.focus(); win.print(); }, 400);
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: C.panel, border: `1px solid ${C.line2}`, borderRadius: 8,
+        width: '100%', maxWidth: 520,
+      }}>
+        <div style={{ padding: 20, borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <FileDown size={24} color={C.accent} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: fontStack.display, fontSize: 22, letterSpacing: 1, lineHeight: 1 }}>
+              {isProgram ? 'EXPORT SEASON BOOK' : `EXPORT ${teams[0].name.toUpperCase()}`}
+            </div>
+            <div style={{ color: C.dim, fontSize: 12, marginTop: 4 }}>
+              {isProgram
+                ? `All ${TEAMS.length} team rosters with stats, position groups, and intangibles summary.`
+                : 'Roster with all athletes grouped by position, N/R status, and health scorecard.'}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer', padding: 4 }}>
+            <X size={20} />
+          </button>
+        </div>
+
+        <div style={{ padding: 20 }}>
+          <div style={{ fontSize: 13, color: C.dim, lineHeight: 1.6, marginBottom: 16 }}>
+            Clicking export opens a print-friendly page. In the print dialog, choose <strong style={{color: C.text}}>"Save as PDF"</strong> as the destination to download a PDF file. On mobile, tap the share icon in the print preview.
+          </div>
+          <div style={{ padding: 12, background: C.panel2, borderRadius: 6, border: `1px solid ${C.line}`, fontSize: 12, color: C.dim }}>
+            <div style={{ color: C.text, fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6 }}>Includes</div>
+            {isProgram ? (
+              <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
+                <li>Clayton Cheer Elite · Tryouts 2026 cover page</li>
+                <li>One page per team, with full roster</li>
+                <li>Position groupings, N/R markers, tryout numbers</li>
+                <li>Team health summary on each page</li>
+              </ul>
+            ) : (
+              <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
+                <li>Team header, level, division, size</li>
+                <li>Roster grouped by position</li>
+                <li>N/R markers and crossover flags</li>
+                <li>Team health summary</li>
+              </ul>
+            )}
+          </div>
+        </div>
+
+        <div style={{ padding: 16, borderTop: `1px solid ${C.line}`, display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={secondaryBtn}>Cancel</button>
+          <button onClick={doPrint} style={primaryBtn}>
+            <Printer size={14} /> Open print view
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function buildPrintHTML(teams, athletes, today, isProgram) {
+  const css = `
+    <style>
+      @page { size: letter; margin: 0.5in; }
+      * { box-sizing: border-box; }
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; color: #0d0f10; margin: 0; padding: 20px; font-size: 11pt; }
+      h1 { font-family: 'Bebas Neue', Impact, sans-serif; letter-spacing: 2px; margin: 0; font-size: 28pt; }
+      h2 { font-family: 'Bebas Neue', Impact, sans-serif; letter-spacing: 1.5px; margin: 0 0 4pt 0; font-size: 22pt; color: #0d0f10; }
+      .sub { color: #666; font-size: 9pt; letter-spacing: 1.5px; text-transform: uppercase; margin-top: 4pt; }
+      .cover { text-align: center; padding: 60pt 0 20pt; border-bottom: 3px solid #ff4d2e; margin-bottom: 30pt; }
+      .cover .mark { display: inline-block; width: 8pt; height: 28pt; background: #ff4d2e; transform: skewX(-12deg); margin-right: 10pt; vertical-align: middle; }
+      .team-page { page-break-after: always; padding: 20pt 0; }
+      .team-page:last-child { page-break-after: auto; }
+      .team-header { border-bottom: 2px solid #0d0f10; padding-bottom: 10pt; margin-bottom: 16pt; }
+      .team-stats { display: flex; gap: 16pt; margin-bottom: 16pt; font-size: 9pt; }
+      .team-stats .stat { background: #f4f4f5; padding: 6pt 10pt; border-left: 3px solid #ff4d2e; }
+      .team-stats .stat .label { color: #666; font-size: 8pt; text-transform: uppercase; letter-spacing: 1.5px; }
+      .team-stats .stat .val { font-family: 'Bebas Neue', Impact, sans-serif; font-size: 18pt; color: #0d0f10; line-height: 1; }
+      .pos-group { margin-bottom: 14pt; }
+      .pos-group h3 { font-family: 'Bebas Neue', Impact, sans-serif; letter-spacing: 1.5px; font-size: 13pt; margin: 0 0 5pt; padding-bottom: 3pt; border-bottom: 1px solid #ccc; }
+      table { width: 100%; border-collapse: collapse; margin-top: 4pt; }
+      th { text-align: left; font-size: 8pt; letter-spacing: 1px; text-transform: uppercase; color: #666; padding: 4pt 6pt; border-bottom: 1px solid #ccc; }
+      td { padding: 5pt 6pt; font-size: 10pt; border-bottom: 1px solid #eee; }
+      .num { font-family: 'JetBrains Mono', monospace; color: #888; font-size: 9pt; width: 40pt; }
+      .nr { display: inline-block; width: 14pt; text-align: center; font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 8pt; border-radius: 2pt; padding: 1pt 0; margin-right: 6pt; }
+      .nr.R { background: #e0efff; color: #2276d0; border: 1px solid #5eb3ff; }
+      .nr.N { background: #ffe9d6; color: #d65a0e; border: 1px solid #f97316; }
+      .photo-cell { width: 28pt; padding-right: 0; }
+      .photo { width: 24pt; height: 24pt; border-radius: 3pt; background-size: cover; background-position: center; border: 1px solid #d4d4d8; }
+      .photo-initials { background-color: #e4e4e7; color: #52525b; display: flex; align-items: center; justify-content: center; font-family: 'Bebas Neue', Impact, sans-serif; font-size: 10pt; letter-spacing: 0.5pt; }
+      .xo { color: #ff4d2e; font-size: 8pt; letter-spacing: 1px; }
+      .health { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8pt; margin-top: 14pt; padding-top: 12pt; border-top: 1px solid #ccc; font-size: 9pt; }
+      .health .item { text-align: center; }
+      .health .item .val { font-family: 'Bebas Neue', Impact, sans-serif; font-size: 20pt; line-height: 1; }
+      .health .item .lbl { font-size: 8pt; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-top: 2pt; }
+      .footer { text-align: center; font-size: 8pt; color: #999; margin-top: 20pt; letter-spacing: 1.5px; text-transform: uppercase; }
+      @media print { body { padding: 0; } }
+    </style>
+  `;
+  const gradeC = (s) => s >= 85 ? '#3ecf8e' : s >= 50 ? '#f5c24c' : '#ef4444';
+
+  const coverPage = isProgram ? `
+    <div class="cover">
+      <div><span class="mark"></span><span style="font-family: 'Bebas Neue', Impact, sans-serif; font-size: 36pt; letter-spacing: 3px; vertical-align: middle;">CLAYTON CHEER ELITE</span></div>
+      <div style="font-family: 'Bebas Neue', Impact, sans-serif; font-size: 22pt; letter-spacing: 2px; margin-top: 10pt;">2026 SEASON · TRYOUT ROSTERS</div>
+      <div class="sub" style="margin-top: 10pt;">Generated ${today}</div>
+    </div>
+  ` : '';
+
+  const teamPages = teams.map(team => {
+    const roster = athletes.filter(a => a.placedOn.includes(team.id));
+    const h = computeTeamHealth(team, roster);
+    const posGroups = POSITIONS.map(pos => {
+      const g = roster.filter(a => a.position === pos);
+      return g.length > 0 ? `
+        <div class="pos-group">
+          <h3>${pos} · ${g.length}/${h.posTargets[pos]}</h3>
+          <table>
+            <tr><th></th><th>#</th><th>Name</th><th>Age</th><th>Exp</th><th>Crossover</th></tr>
+            ${g.map(a => {
+              const initials = `${a.first[0]}${a.last[0]}`.toUpperCase();
+              const photoCell = a.photo
+                ? `<div class="photo" style="background-image:url(${a.photo})"></div>`
+                : `<div class="photo photo-initials">${initials}</div>`;
+              return `
+              <tr>
+                <td class="photo-cell">${photoCell}</td>
+                <td class="num">#${a.num}</td>
+                <td><span class="nr ${a.isReturner?'R':'N'}">${a.isReturner?'R':'N'}</span>${a.first} ${a.last}</td>
+                <td>${a.age}y</td>
+                <td>${a.yearsExp}yr</td>
+                <td>${a.wantsCrossover ? '<span class="xo">⇄ XO</span>' : '—'}</td>
+              </tr>`;
+            }).join('')}
+          </table>
+        </div>
+      ` : '';
+    }).join('');
+
+    return `
+      <div class="team-page">
+        <div class="team-header">
+          <h2>${team.name.toUpperCase()}</h2>
+          <div class="sub">Level ${team.level} · ${team.type} · Ages ${team.ageMin}–${team.ageMax} · ${team.scoresheet === 'open' ? 'Open (IASF)' : 'Varsity / United'}</div>
+        </div>
+        <div class="team-stats">
+          <div class="stat"><div class="label">Roster</div><div class="val">${roster.length}/${team.sizeTarget}</div></div>
+          <div class="stat"><div class="label">Returners</div><div class="val">${h.continuity.returnerCount}</div></div>
+          <div class="stat"><div class="label">New</div><div class="val">${h.continuity.newCount}</div></div>
+          <div class="stat"><div class="label">Avg Age</div><div class="val">${h.avgAge.toFixed(1)}</div></div>
+          <div class="stat"><div class="label">Avg Exp</div><div class="val">${h.avgExp.toFixed(1)}yr</div></div>
+        </div>
+        ${roster.length === 0 ? '<div style="padding: 40pt; text-align: center; color: #999; font-style: italic;">No athletes placed on this team yet.</div>' : posGroups}
+        <div class="health">
+          <div class="item"><div class="val" style="color: ${gradeC(h.overall)}">${h.overall || '—'}</div><div class="lbl">Health</div></div>
+          <div class="item"><div class="val" style="color: ${gradeC(h.scoresheetMaxAvg)}">${h.scoresheetMaxAvg}%</div><div class="lbl">Max-Out</div></div>
+          <div class="item"><div class="val" style="color: ${gradeC(h.scoresheetExecAvg)}">${h.scoresheetExecAvg}</div><div class="lbl">Execution</div></div>
+          <div class="item"><div class="val" style="color: ${gradeC(Math.round(h.culture*10))}">${Math.round(h.culture*10)}</div><div class="lbl">Culture</div></div>
+          <div class="item"><div class="val" style="color: ${gradeC(Math.round(h.leadershipBalance))}">${Math.round(h.leadershipBalance)}</div><div class="lbl">Leadership</div></div>
+        </div>
+        <div class="footer">Clayton Cheer Elite · Tryouts 2026 · ${today}</div>
+      </div>
+    `;
+  }).join('');
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>CCE Tryout Export</title>${css}</head><body>${coverPage}${teamPages}</body></html>`;
+}
+
+function FinalizeModal({ modal, athletes, finalizedTeams, onConfirmTeam, onConfirmProgram, onClose }) {
+  const isProgram = modal.type === 'program';
+  let validations, team;
+  if (isProgram) {
+    validations = TEAMS.map(t => ({ team: t, ...validateTeamForFinalize(t, athletes, Object.fromEntries(athletes.map(a => [a.id, a.placedOn]))) }));
+  } else {
+    team = TEAMS.find(t => t.id === modal.teamId);
+    const v = validateTeamForFinalize(team, athletes, Object.fromEntries(athletes.map(a => [a.id, a.placedOn])));
+    validations = [{ team, ...v }];
+  }
+
+  const totalBlocks = validations.reduce((s, v) => s + v.blocks.length, 0);
+  const totalWarnings = validations.reduce((s, v) => s + v.warnings.length, 0);
+  const canFinalize = totalBlocks === 0;
+
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: C.panel, border: `1px solid ${C.line2}`, borderRadius: 8,
+        width: '100%', maxWidth: 640, maxHeight: '85vh', display: 'flex', flexDirection: 'column',
+      }}>
+        <div style={{ padding: 20, borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: 12 }}>
+          {canFinalize ? <ShieldCheck size={24} color={C.green} /> : <AlertCircle size={24} color={C.red} />}
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: fontStack.display, fontSize: 22, letterSpacing: 1, lineHeight: 1 }}>
+              {isProgram ? 'FINALIZE SEASON' : `FINALIZE ${team.name.toUpperCase()}`}
+            </div>
+            <div style={{ color: C.dim, fontSize: 12, marginTop: 3 }}>
+              {canFinalize
+                ? (isProgram ? 'All 9 teams pass validation.' : 'All checks pass. Ready to lock this roster.')
+                : `${totalBlocks} issue${totalBlocks > 1 ? 's' : ''} must be fixed before finalizing${totalWarnings > 0 ? `, ${totalWarnings} warning${totalWarnings > 1 ? 's' : ''}` : ''}.`}
+            </div>
+          </div>
+          <button onClick={onClose} style={{
+            background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer', padding: 4,
+          }}><X size={20} /></button>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+          {validations.map(({ team: t, blocks, warnings }) => {
+            if (blocks.length === 0 && warnings.length === 0 && !isProgram) {
+              return (
+                <div key={t.id} style={{
+                  padding: 16, background: 'rgba(62,207,142,0.08)', border: `1px solid ${C.green}`,
+                  borderRadius: 6, display: 'flex', alignItems: 'center', gap: 10,
+                }}>
+                  <CheckCircle2 size={18} color={C.green} />
+                  <div style={{ color: C.green, fontWeight: 500 }}>All validation checks passed.</div>
+                </div>
+              );
+            }
+            if (blocks.length === 0 && warnings.length === 0 && isProgram) return null;
+
+            return (
+              <div key={t.id} style={{ marginBottom: 16 }}>
+                {isProgram && (
+                  <div style={{ fontFamily: fontStack.display, fontSize: 14, letterSpacing: 1, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid ${C.line}` }}>
+                    {t.name.toUpperCase()}
+                  </div>
+                )}
+                {blocks.map((b, i) => (
+                  <div key={i} style={{
+                    padding: 12, marginBottom: 8,
+                    background: 'rgba(239,68,68,0.08)', border: `1px solid ${C.red}`, borderRadius: 6,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.red, fontWeight: 600, fontSize: 13 }}>
+                      <AlertCircle size={14} /> BLOCK · {b.msg}
+                    </div>
+                    {b.detail && b.detail.map((d, j) => (
+                      <div key={j} style={{ fontSize: 11, color: C.dim, marginTop: 4, paddingLeft: 22 }}>{d}</div>
+                    ))}
+                  </div>
+                ))}
+                {warnings.map((w, i) => (
+                  <div key={i} style={{
+                    padding: 12, marginBottom: 8,
+                    background: 'rgba(245,194,76,0.08)', border: `1px solid ${C.yellow}`, borderRadius: 6,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.yellow, fontWeight: 600, fontSize: 13 }}>
+                      <AlertTriangle size={14} /> WARNING · {w.msg}
+                    </div>
+                    {w.detail && w.detail.map((d, j) => (
+                      <div key={j} style={{ fontSize: 11, color: C.dim, marginTop: 4, paddingLeft: 22 }}>{d}</div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+
+          {isProgram && canFinalize && (
+            <div style={{
+              padding: 16, background: 'rgba(62,207,142,0.08)', border: `1px solid ${C.green}`,
+              borderRadius: 6, display: 'flex', alignItems: 'center', gap: 10,
+            }}>
+              <CheckCircle2 size={18} color={C.green} />
+              <div style={{ color: C.green, fontWeight: 500 }}>All {TEAMS.length} teams pass validation. Ready to lock the season.</div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: 16, borderTop: `1px solid ${C.line}`, display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={secondaryBtn}>Cancel</button>
+          <button
+            onClick={() => isProgram ? onConfirmProgram() : onConfirmTeam(modal.teamId)}
+            disabled={!canFinalize}
+            style={{
+              background: canFinalize ? C.green : C.panel2,
+              color: canFinalize ? '#fff' : C.dim2,
+              border: 'none', padding: '10px 20px', borderRadius: 4,
+              cursor: canFinalize ? 'pointer' : 'not-allowed',
+              display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12,
+              letterSpacing: 1.5, textTransform: 'uppercase', fontWeight: 600,
+            }}
+          >
+            <Lock size={14} />
+            {canFinalize ? (totalWarnings > 0 ? `Finalize anyway (${totalWarnings} warning${totalWarnings>1?'s':''})` : 'Confirm finalize') : 'Fix blocks first'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const primaryBtn = {
+  background: C.accent, color: '#fff', border: 'none',
+  padding: '8px 14px', borderRadius: 4, cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12,
+  letterSpacing: 1, textTransform: 'uppercase', fontWeight: 500,
+};
+const secondaryBtn = {
+  background: C.panel2, color: C.text, border: `1px solid ${C.line2}`,
+  padding: '8px 14px', borderRadius: 4, cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12,
+  letterSpacing: 1, textTransform: 'uppercase', fontWeight: 500,
+};
